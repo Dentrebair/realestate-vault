@@ -5,7 +5,8 @@ import { handleCallback } from './callbacks.js';
 import { contact, help, reset, saved, start } from './commands.js';
 import { HELP, NON_TEXT, RATE_LIMIT_PER_HOUR } from './copy.js';
 import { createDedupe, createQueue, createRateLimiter } from './guards.js';
-import { handleText, log } from './pipeline.js';
+import { log } from './log.js';
+import { handleText } from './pipeline.js';
 import { createDeps } from './agent.js';
 
 export const ALLOWED_UPDATES = ['message', 'callback_query'];

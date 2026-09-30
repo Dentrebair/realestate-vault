@@ -6,6 +6,7 @@ import { addToShortlist, getLead, setBotState, upsertLeadMemory } from '../src/l
 import { claimsVisitButton, guardAmounts, mentionUnavailable, moneyHint, withoutBackstage, withoutDashes, withoutPhantomButtons } from '../src/telegram/agent.js';
 import { isNegotiation } from '../src/telegram/intent.js';
 import { createBot } from '../src/telegram/bot.js';
+import { CAPTION_LIMIT, renderCard } from '../src/telegram/cards.js';
 import { FALLBACK, NON_TEXT, OFF_TOPIC, RATE_LIMITED, STALE_PROPERTY, TOO_LONG } from '../src/telegram/copy.js';
 import { Cr, L, properties } from './fixtures/properties.js';
 import { createFakeSupabase } from './helpers/fakeSupabase.js';
@@ -35,14 +36,14 @@ const say = (text, id = USER) => ({
   }
 });
 
-const tap = (data, id = USER) => ({
+const tap = (data, id = USER, message = {}) => ({
   update_id: next(),
   callback_query: {
     id: String(next()),
     from: person(id),
     chat_instance: 'x',
     data,
-    message: { message_id: 77, date: 0, chat: privateChat(id), text: 'card' }
+    message: { message_id: 77, date: 0, chat: privateChat(id), text: 'card', ...message }
   }
 });
 
@@ -51,7 +52,7 @@ const BOT_INFO = {
   can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false
 };
 
-function harness({ generate = async () => ({ text: 'ok' }), tables = {}, config = {} } = {}) {
+function harness({ generate = async () => ({ text: 'ok' }), tables = {}, config = {}, failMethod = null } = {}) {
   const supabase = createFakeSupabase({ properties, ...tables });
   const calls = [];
   const bot = createBot({
@@ -63,10 +64,13 @@ function harness({ generate = async () => ({ text: 'ok' }), tables = {}, config 
   });
   bot.api.config.use(async (_previous, method, payload) => {
     calls.push({ method, payload });
+    if (method === failMethod) return { ok: false, error_code: 400, description: 'Bad Request: wrong file identifier/HTTP URL specified' };
     const result =
       method === 'sendMessage'
         ? { message_id: next(), date: 0, chat: privateChat(payload.chat_id), text: payload.text }
-        : true;
+        : method === 'sendPhoto'
+          ? { message_id: next(), date: 0, chat: privateChat(payload.chat_id), caption: payload.caption }
+          : true;
     return { ok: true, result };
   });
 
@@ -640,4 +644,139 @@ test('if no button can be sent, the promise to send one is removed', async () =>
   await seedLead(h, {}, 'interested');
   await h.send(say('I want to visit'));
   assert.equal(h.toUser().at(-1).text, 'Happy to arrange it.');
+});
+
+// ---- photos -------------------------------------------------------------------------------
+
+const photoRows = (propertyId, count) =>
+  Array.from({ length: count }, (_, i) => ({ id: i + 1, property_id: propertyId, path: `${propertyId}/photo-${i}.jpg`, position: i }));
+
+const searchNavalur = async ({ tools }) => {
+  await tools.search_properties.execute({ location: 'OMR', category: 'residential', bedrooms: 2 }, toolCall);
+  return { text: 'Here is one.' };
+};
+
+test('a listing with photos is sent as its cover photo, with the card as the caption and a gallery row', async () => {
+  const h = harness({ generate: searchNavalur, tables: { property_photos: photoRows('p04', 3) } });
+  await h.send(say('2BHK in OMR'));
+
+  const [card] = h.sent('sendPhoto');
+  assert.ok(card.photo.endsWith('/storage/v1/object/public/property-photos/p04/photo-0.jpg'));
+  assert.match(card.caption, /High-Rise 2BHK Apartment/);
+  assert.match(card.caption, /₹62 L/);
+  assert.equal(card.parse_mode, 'HTML');
+  assert.deepEqual(card.reply_markup.inline_keyboard.map((row) => row.map((b) => b.callback_data)), [
+    ['action:visit:p04', 'action:save:p04'],
+    ['action:ph:p04:2', 'action:noop', 'action:ph:p04:1']
+  ]);
+  assert.equal(card.reply_markup.inline_keyboard[1][1].text, '📷 1/3');
+  assert.equal(h.toUser().filter((m) => /Matches your requirements|Close option/.test(m.text)).length, 0, 'no duplicate text card');
+});
+
+test('a listing with one photo has no gallery row; one with none stays a text card', async () => {
+  const one = harness({ generate: searchNavalur, tables: { property_photos: photoRows('p04', 1) } });
+  await one.send(say('2BHK in OMR'));
+  assert.equal(one.sent('sendPhoto')[0].reply_markup.inline_keyboard.length, 1);
+
+  const none = harness({ generate: searchNavalur });
+  await none.send(say('2BHK in OMR'));
+  assert.equal(none.sent('sendPhoto').length, 0);
+  assert.match(none.toUser()[0].text, /High-Rise 2BHK Apartment/);
+});
+
+test('if Telegram cannot fetch the photo, the card is still sent as text', async () => {
+  const h = harness({ generate: searchNavalur, tables: { property_photos: photoRows('p04', 2) }, failMethod: 'sendPhoto' });
+  await h.send(say('2BHK in OMR'));
+  assert.match(h.toUser()[0].text, /High-Rise 2BHK Apartment/);
+  assert.deepEqual(buttons(h.toUser()[0]), ['action:visit:p04', 'action:save:p04']);
+});
+
+test('the arrows swap the photo in place, keep the caption, and wrap around', async () => {
+  const h = harness({ tables: { property_photos: photoRows('p04', 3) } });
+  await seedLead(h, {});
+  const caption = 'High-Rise 2BHK\n₹62 L';
+  const entities = [{ type: 'bold', offset: 0, length: 4 }];
+  const card = { caption, caption_entities: entities, reply_markup: { inline_keyboard: [[], []] } };
+
+  await h.send(tap('action:ph:p04:1', USER, card));
+  const [edit] = h.sent('editMessageMedia');
+  assert.ok(edit.media.media.endsWith('p04/photo-1.jpg'));
+  assert.equal(edit.media.caption, caption);
+  assert.deepEqual(edit.media.caption_entities, entities);
+  assert.equal(edit.reply_markup.inline_keyboard[1][1].text, '📷 2/3');
+  assert.deepEqual(edit.reply_markup.inline_keyboard[1].map((b) => b.callback_data), ['action:ph:p04:0', 'action:noop', 'action:ph:p04:2']);
+
+  await h.send(tap('action:ph:p04:-1', USER, card));
+  assert.ok(h.sent('editMessageMedia')[1].media.media.endsWith('p04/photo-2.jpg'), 'before the first is the last');
+  await h.send(tap('action:ph:p04:3', USER, card));
+  assert.ok(h.sent('editMessageMedia')[2].media.media.endsWith('p04/photo-0.jpg'), 'after the last is the first');
+  assert.equal(h.sent('answerCallbackQuery').length, 3);
+});
+
+test('the gallery remembers whether the property is shortlisted', async () => {
+  const h = harness({ tables: { property_photos: photoRows('p04', 2) } });
+  await seedLead(h, {});
+  await addToShortlist(h.supabase, ID, 'p04');
+  await h.send(tap('action:ph:p04:1', USER, { caption: 'c', reply_markup: { inline_keyboard: [[], []] } }));
+  assert.deepEqual(h.sent('editMessageMedia')[0].reply_markup.inline_keyboard[0].map((b) => b.callback_data), ['action:visit:p04', 'action:unsave:p04']);
+});
+
+test('the counter button does nothing, and a missing gallery says so quietly', async () => {
+  const h = harness();
+  await seedLead(h, {});
+  await h.send(tap('action:noop'));
+  await h.send(tap('action:ph:p04:1', USER, { caption: 'c' }));
+  assert.equal(h.sent('editMessageMedia').length, 0);
+  assert.equal(h.sent('answerCallbackQuery').length, 2);
+  assert.equal(h.sent('answerCallbackQuery')[1].text, 'No photos to show.');
+});
+
+test('saving a property on a photo card keeps the gallery row', async () => {
+  const h = harness({ tables: { property_photos: photoRows('p09', 3) } });
+  await seedLead(h, {});
+  const galleryRow = [{ text: '◀', callback_data: 'action:ph:p09:2' }, { text: '📷 1/3', callback_data: 'action:noop' }, { text: '▶', callback_data: 'action:ph:p09:1' }];
+  await h.send(tap('action:save:p09', USER, { reply_markup: { inline_keyboard: [[], galleryRow] } }));
+
+  const rows = h.sent('editMessageReplyMarkup')[0].reply_markup.inline_keyboard;
+  assert.deepEqual(rows[0].map((b) => b.callback_data), ['action:visit:p09', 'action:unsave:p09']);
+  assert.deepEqual(rows[1], galleryRow);
+});
+
+test('a caption never exceeds Telegram\'s limit', () => {
+  const long = {
+    kind: 'recommendation', title: 'T'.repeat(200), location: 'L'.repeat(150), priceDisplay: '₹1 Cr', status: 'under_construction',
+    statusLabel: 'Under construction', bedrooms: 3, rera: 'R'.repeat(80),
+    highlights: Array.from({ length: 6 }, (_, i) => ({ label: `Label ${i}`, value: 'v'.repeat(180) })),
+    differences: Array.from({ length: 5 }, () => 'a fairly long explanation of how this property differs from the request')
+  };
+  assert.ok(renderCard(long).length > 1024, 'the fixture really is too long');
+  assert.ok(renderCard(long, { maxLength: CAPTION_LIMIT }).length <= CAPTION_LIMIT);
+  assert.match(renderCard(long, { maxLength: CAPTION_LIMIT }), /How it differs/);
+});
+
+test('/saved shows photos too', async () => {
+  const h = harness({ tables: { property_photos: photoRows('p03', 2) } });
+  await seedLead(h, {});
+  await addToShortlist(h.supabase, ID, 'p03');
+  await h.send(say('/saved'));
+  const [photo] = h.sent('sendPhoto');
+  assert.match(photo.caption, /Your shortlist/);
+  assert.equal(photo.reply_markup.inline_keyboard[1].length, 3);
+});
+
+test('before the photos table exists, searches and /saved still work as text cards', async () => {
+  const h = harness({ generate: searchNavalur });
+  const realFrom = h.supabase.from;
+  h.supabase.from = (name) =>
+    name === 'property_photos'
+      ? { select: () => ({ in: () => ({ order: async () => ({ data: null, error: { message: 'relation "property_photos" does not exist' } }) }) }) }
+      : realFrom(name);
+
+  await h.send(say('2BHK in OMR'));
+  assert.equal(h.sent('sendPhoto').length, 0);
+  assert.match(h.toUser()[0].text, /High-Rise 2BHK Apartment/);
+
+  await addToShortlist(h.supabase, ID, 'p03');
+  await h.send(say('/saved'));
+  assert.ok(h.toUser().some((m) => /Sky Mansion/.test(m.text)));
 });

@@ -5,6 +5,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { createLoginLimiter } from '../src/admin/auth.js';
 import { getDemand } from '../src/admin/board.js';
+import { config } from '../src/config.js';
 import { Cr, L, properties } from './fixtures/properties.js';
 import { createFakeSupabase } from './helpers/fakeSupabase.js';
 
@@ -295,4 +296,117 @@ test('the page never puts customer text into HTML', () => {
   for (const risky of ['innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'eval(']) {
     assert.ok(!script.includes(risky), `board.js must not use ${risky}`);
   }
+});
+
+// ---- listing photos -------------------------------------------------------------------------
+
+const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(200, 1)]);
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(50, 2)]);
+
+const upload = (agent, id, body, type = 'image/jpeg') =>
+  agent.post(`/admin/api/properties/${id}/photos`).set('Content-Type', type).send(body);
+
+test('the listings list shows every property with its photo count and cover', async () => {
+  const { app } = build();
+  await request(app).get('/admin/api/properties').expect(401);
+
+  const agent = await signIn(app, 'viewer@x.com');
+  const first = (await agent.get('/admin/api/properties').expect(200)).body.properties;
+  assert.equal(first.length, 20);
+  assert.ok(first.every((p) => p.photoCount === 0 && p.cover === null));
+  assert.deepEqual(first.map((p) => p.title), [...first.map((p) => p.title)].sort((a, b) => a.localeCompare(b)));
+  assert.equal(first.find((p) => p.id === 'p05').price, 'Price on Request (POR)');
+
+  const admin = await signIn(app);
+  await upload(admin, 'p04', JPEG).expect(201);
+  const after = (await agent.get('/admin/api/properties').expect(200)).body.properties.find((p) => p.id === 'p04');
+  assert.equal(after.photoCount, 1);
+  assert.match(after.cover, /\/storage\/v1\/object\/public\/property-photos\/p04\/.+\.jpg$/);
+});
+
+test('an admin uploads photos one at a time; they come back in order', async () => {
+  const { app, supabase } = build();
+  const agent = await signIn(app);
+
+  const a = (await upload(agent, 'p04', JPEG).expect(201)).body.photo;
+  const b = (await upload(agent, 'p04', PNG, 'image/png').expect(201)).body.photo;
+  assert.deepEqual([a.position, b.position], [0, 1]);
+  assert.equal(supabase.files.size, 2);
+  assert.equal(supabase.tables.property_photos[0].uploaded_by, 'admin@x.com');
+
+  const listed = (await agent.get('/admin/api/properties/p04/photos').expect(200)).body;
+  assert.equal(listed.property.title, 'High-Rise 2BHK Apartment near Tech Parks');
+  assert.deepEqual(listed.photos.map((p) => p.id), [a.id, b.id]);
+  assert.equal(listed.max, 10);
+});
+
+test('viewers and signed-out visitors cannot change photos', async () => {
+  const { app, supabase } = build();
+  await request(app).post('/admin/api/properties/p04/photos').set('Content-Type', 'image/jpeg').send(JPEG).expect(401);
+
+  const viewer = await signIn(app, 'viewer@x.com');
+  await upload(viewer, 'p04', JPEG).expect(403);
+  await viewer.delete('/admin/api/properties/p04/photos/1').expect(403);
+  await viewer.post('/admin/api/properties/p04/photos/order').send({ ids: [] }).expect(403);
+  assert.equal(supabase.files.size, 0);
+  await viewer.get('/admin/api/properties/p04/photos').expect(200);
+});
+
+test('uploads that are not real images, are too big, or are for a missing listing are refused', async () => {
+  const { app, supabase } = build();
+  const agent = await signIn(app);
+
+  // A script dressed up as an image is caught by its bytes, not its label.
+  await upload(agent, 'p04', Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')).expect(415);
+  await upload(agent, 'p04', Buffer.from('plain text pretending to be a photo')).expect(415);
+  // The wrong kind of request body.
+  await agent.post('/admin/api/properties/p04/photos').send({ not: 'an image' }).expect(415);
+  await upload(agent, 'p04', Buffer.alloc(0)).expect(415);
+  // Too big.
+  await upload(agent, 'p04', Buffer.concat([JPEG, Buffer.alloc(5 * 1024 * 1024)])).expect(413);
+  // No such listing.
+  await upload(agent, 'nope', JPEG).expect(404);
+  await agent.get('/admin/api/properties/nope/photos').expect(404);
+
+  assert.equal(supabase.files.size, 0);
+});
+
+test('a listing stops at ten photos', async () => {
+  const { app } = build();
+  const agent = await signIn(app);
+  for (let i = 0; i < 10; i++) await upload(agent, 'p04', JPEG).expect(201);
+  const response = await upload(agent, 'p04', JPEG).expect(409);
+  assert.match(response.body.message, /at most 10 photos/);
+});
+
+test('photos can be deleted and reordered, and the order sticks', async () => {
+  const { app, supabase } = build();
+  const agent = await signIn(app);
+  const ids = [];
+  for (let i = 0; i < 3; i++) ids.push((await upload(agent, 'p04', JPEG).expect(201)).body.photo.id);
+
+  await agent.post('/admin/api/properties/p04/photos/order').send({ ids: [ids[2], ids[0], ids[1]] }).expect(200);
+  assert.deepEqual((await agent.get('/admin/api/properties/p04/photos')).body.photos.map((p) => p.id), [ids[2], ids[0], ids[1]]);
+
+  await agent.post('/admin/api/properties/p04/photos/order').send({ ids: [ids[0]] }).expect(400);
+  await agent.post('/admin/api/properties/p04/photos/order').send({ ids: 'x' }).expect(400);
+  await agent.post('/admin/api/properties/p04/photos/order').type('form').send('ids=1').expect(415);
+
+  await agent.delete(`/admin/api/properties/p04/photos/${ids[0]}`).expect(200);
+  assert.equal(supabase.files.size, 2);
+  const left = (await agent.get('/admin/api/properties/p04/photos')).body.photos;
+  assert.deepEqual(left.map((p) => [p.id, p.position]), [[ids[2], 0], [ids[1], 1]]);
+
+  await agent.delete(`/admin/api/properties/p04/photos/${ids[0]}`).expect(404);
+  await agent.delete('/admin/api/properties/p16/photos/' + ids[1]).expect(404);
+});
+
+test('the board page may load images from Supabase Storage and nowhere else', async () => {
+  const { app } = build();
+  const csp = (await request(app).get('/admin/')).headers['content-security-policy'];
+  const imgSrc = csp.split(';').find((d) => d.trim().startsWith('img-src'));
+  assert.match(imgSrc, /'self'/);
+  assert.match(imgSrc, /blob:/);
+  if (config.supabaseUrl) assert.ok(imgSrc.includes(new URL(config.supabaseUrl).origin));
+  assert.doesNotMatch(imgSrc, /\*/);
 });

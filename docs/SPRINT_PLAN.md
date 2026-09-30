@@ -156,6 +156,20 @@ Status: built 2026-10-01. One step is waiting on you (creating the first staff a
 
 ---
 
+## Add-on: property photos
+
+Status: built 2026-10-01. Needs `sql/003_photos.sql` run, and photos uploaded by you.
+
+- [x] Storage: a public `property-photos` bucket and a `property_photos` table; the `properties` table is not altered.
+- [x] Admin panel **Listings** tab: search, thumbnails, photo manager with multi-upload, reorder and delete. Admins change, viewers look.
+- [x] Upload safety: admin-only, one raw image per request, type read from the file's bytes, 5 MB and 10-photo limits, generated file names, browser-side shrink to 1600 px that also strips phone location data, page allowed to load images only from Supabase Storage.
+- [x] Telegram cards: cover photo with the details as the caption, and a ◀ 2/5 ▶ row that swaps the photo in place. Text card if a listing has no photos, or if Telegram cannot fetch one. Shortlist and Saved keep the gallery row.
+- [x] Checked against the real Telegram API: photo send with formatting and buttons, in-place swap with the caption kept, long captions, and a bad URL refused cleanly. The upload flow was exercised in a real browser (upload, reorder, delete).
+- [ ] **You:** run `sql/003_photos.sql`, then upload photos for a few listings from the Listings tab.
+- Later: a Telegram Mini App gallery with true finger-swipe, once the bot is deployed (needs a public HTTPS address).
+
+---
+
 ## Test leads
 
 [test/fixtures/testLeads.js](../test/fixtures/testLeads.js) holds 50 leads written against the live inventory. Each has a saved profile, the messages that person would type, and what a good reply looks like.

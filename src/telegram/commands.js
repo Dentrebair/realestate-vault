@@ -1,7 +1,9 @@
 // Slash commands and the messages that are not plain text.
 import { setBotState, upsertLeadMemory } from '../leadMemory.js';
 import { getProperty } from '../propertySearch.js';
-import { browseKeyboard, cardKeyboard, renderCard } from './cards.js';
+import { browseKeyboard } from './cards.js';
+import { loadPhotos } from '../photos.js';
+import { sendCard } from './present.js';
 import { HELP, NO_SAVED, PHONE_THANKS, RESET_DONE, welcome } from './copy.js';
 import { clearHistory } from './history.js';
 import { customerIdOf, ensureLead } from './lead.js';
@@ -42,11 +44,8 @@ export async function saved(ctx, deps) {
     } else if (!SHOWABLE.includes(found.row.status)) {
       await ctx.reply(`${found.view.title} is no longer available.`);
     } else {
-      await ctx.reply(renderCard({ ...found.view, kind: 'saved' }), {
-        parse_mode: 'HTML',
-        reply_markup: cardKeyboard(id, { saved: true }),
-        link_preview_options: { is_disabled: true }
-      });
+      const photos = (await loadPhotos(deps.supabase, [id]).catch(() => new Map())).get(id) ?? [];
+      await sendCard(deps.api, ctx.chat.id, { ...found.view, kind: 'saved' }, { saved: true, photos });
     }
   }
 }

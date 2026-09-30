@@ -46,6 +46,7 @@ Run these in the Supabase SQL editor, in order:
 
 1. [sql/001_prototype_schema.sql](sql/001_prototype_schema.sql) creates the lead tables.
 2. [sql/002_admin.sql](sql/002_admin.sql) creates the staff list for the board.
+3. [sql/003_photos.sql](sql/003_photos.sql) creates the photo table and the public `property-photos` storage bucket.
 
 The listings themselves live in a `properties` table that already exists in the project.
 
@@ -80,6 +81,17 @@ Admins can move leads between stages; viewers can only look. Each move is record
 `all`, or `none`. Decide this before real customers use the bot.
 
 A lead can be linked directly: `/admin/#lead=telegram:123456`.
+
+### Listing photos
+
+The board's **Listings** tab is where photos are managed. Open a listing, choose images, and they upload. Admins can
+reorder (◀ ▶) and delete; viewers can only look. Up to 10 photos per listing, JPEG, PNG or WebP, at most 5 MB each. The
+browser shrinks every image to 1600 pixels and re-encodes it, which also removes location data from phone photos; the server
+then checks the file really is an image.
+
+In Telegram, a listing with photos is sent as its first photo with the property details as the caption. A second row of
+buttons, ◀ 2/5 ▶, swaps the picture in place, so the card works as a carousel. Listings without photos stay as text cards.
+If Telegram cannot fetch a photo, the card is sent as text instead. Photos are public links, because customers see them.
 
 ## Test leads and the demo
 
@@ -128,6 +140,7 @@ evals/          model evals             scripts/        seeding and helpers
 - Staff passwords are checked by Supabase; sessions live in HttpOnly, SameSite=Strict cookies; the staff list decides who may enter.
 - Lead tables are locked to the server. The public Supabase key cannot read them.
 - Customer text is shown on the board as plain text only.
+- Photo uploads are admin-only, checked by their real bytes (not the label), size-limited, and stored under generated names.
 - The HTTP tool routes are off in production unless `ENABLE_TOOL_ROUTES=true`, and then need `CONNECTOR_BEARER_TOKEN`.
 - Secrets live in `.env`, which is not committed. If one is ever pasted somewhere it should not be, rotate it.
 

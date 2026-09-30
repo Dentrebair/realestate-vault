@@ -1,5 +1,5 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import { log } from './pipeline.js';
+import { log } from './log.js';
 
 function sameSecret(given, expected) {
   if (!given || !expected) return false;

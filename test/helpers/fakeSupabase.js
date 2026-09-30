@@ -19,6 +19,7 @@ const DEFAULTS = {
 };
 
 let clock = 0;
+let nextId = 1;
 const stamp = () => new Date(Date.UTC(2026, 0, 1) + clock++ * 1000).toISOString();
 
 export function createFakeSupabase(seed = {}) {
@@ -90,7 +91,7 @@ export function createFakeSupabase(seed = {}) {
         affected = matching();
       } else if (state.op === 'insert') {
         for (const row of state.rows) {
-          const full = { ...(DEFAULTS[name]?.() ?? {}), created_at: stamp(), ...structuredClone(row) };
+          const full = { ...(DEFAULTS[name]?.() ?? {}), created_at: stamp(), ...(name === 'property_photos' ? { id: nextId++ } : {}), ...structuredClone(row) };
           table.push(full);
           affected.push(full);
         }
@@ -137,5 +138,21 @@ export function createFakeSupabase(seed = {}) {
     return api;
   }
 
-  return { from, tables };
+  // A minimal stand-in for Storage: files are kept in memory.
+  const files = new Map();
+  const storage = {
+    from: (bucket) => ({
+      upload: async (path, body, options) => {
+        if (files.has(`${bucket}/${path}`) && !options?.upsert) return { data: null, error: { message: 'The resource already exists' } };
+        files.set(`${bucket}/${path}`, { body, contentType: options?.contentType });
+        return { data: { path }, error: null };
+      },
+      remove: async (paths) => {
+        for (const path of paths) files.delete(`${bucket}/${path}`);
+        return { data: paths.map((name) => ({ name })), error: null };
+      }
+    })
+  };
+
+  return { from, tables, storage, files };
 }

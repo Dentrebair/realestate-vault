@@ -7,6 +7,7 @@ import {
   setBotState,
   setStage
 } from '../leadMemory.js';
+import { loadPhotos } from '../photos.js';
 import { getProperty, searchProperties } from '../propertySearch.js';
 import { cardKeyboard } from './cards.js';
 import { STALE_PROPERTY, SHARE_NUMBER_PROMPT, VISIT_ALREADY, visitRecorded } from './copy.js';
@@ -19,13 +20,13 @@ import { Keyboard } from 'grammy';
 const SHOWABLE = ['available', 'under_construction'];
 
 export async function handleCallback(ctx, deps) {
-  const match = /^action:(visit|save|unsave|more|browse)(?::(.+))?$/.exec(ctx.callbackQuery.data ?? '');
+  const match = /^action:(visit|save|unsave|more|browse|ph|noop)(?::(.+))?$/.exec(ctx.callbackQuery.data ?? '');
   let answer = {};
 
   try {
     if (!match) return;
     const [, action, arg] = match;
-    const handlers = { visit, save, unsave, more, browse };
+    const handlers = { visit, save, unsave, more, browse, ph: gallery, noop: async () => ({}) };
     answer = (await handlers[action](ctx, deps, arg)) ?? {};
   } finally {
     // Always answer, or the button keeps spinning.
@@ -114,7 +115,7 @@ async function more(ctx, deps) {
     limit: 5,
     offset: last.nextOffset
   });
-  const views = await sendSearchResult(api, ctx.chat.id, result, lead);
+  const views = await sendSearchResult({ api, supabase, chatId: ctx.chat.id, result, lead });
   await setBotState(supabase, lead.customerId, {
     shown: rememberShown(views),
     lastSearch: { filters: last.filters, nextOffset: result.nextOffset }
@@ -129,7 +130,7 @@ async function browse(ctx, deps, category) {
 
   const filters = { category, limit: 5, offset: 0 };
   const result = await searchProperties(supabase, { ...filters, customerId: lead.customerId });
-  const views = await sendSearchResult(api, ctx.chat.id, result, lead);
+  const views = await sendSearchResult({ api, supabase, chatId: ctx.chat.id, result, lead });
 
   await setBotState(supabase, lead.customerId, {
     scope: 'on_topic',
@@ -148,9 +149,37 @@ async function browse(ctx, deps, category) {
   return {};
 }
 
+// Steps through a property's photos by swapping the picture in place. The caption, with its formatting, is reused.
+async function gallery(ctx, deps, arg) {
+  const at = arg.lastIndexOf(':');
+  const propertyId = arg.slice(0, at);
+  const requested = Number(arg.slice(at + 1));
+
+  const photos = (await loadPhotos(deps.supabase, [propertyId])).get(propertyId) ?? [];
+  const message = ctx.callbackQuery.message;
+  if (!photos.length || !message?.caption) return { text: 'No photos to show.' };
+
+  const index = ((Number.isInteger(requested) ? requested : 0) % photos.length + photos.length) % photos.length;
+  const lead = await ensureLead(deps.supabase, ctx.from);
+  const saved = (lead.shortlistedPropertyIds ?? []).includes(propertyId);
+
+  try {
+    await ctx.editMessageMedia(
+      { type: 'photo', media: photos[index].url, caption: message.caption, caption_entities: message.caption_entities },
+      { reply_markup: cardKeyboard(propertyId, { saved, photo: { index, total: photos.length } }) }
+    );
+  } catch (error) {
+    if (!/not modified/i.test(error.message)) throw error;
+  }
+  return {};
+}
+
+// Swaps Shortlist and Saved on the first row only, so a photo card keeps its ◀ 2/5 ▶ row.
 async function swapKeyboard(ctx, propertyId, saved) {
   try {
-    await ctx.editMessageReplyMarkup({ reply_markup: cardKeyboard(propertyId, { saved }) });
+    const rows = ctx.callbackQuery.message?.reply_markup?.inline_keyboard ?? [];
+    const first = cardKeyboard(propertyId, { saved }).inline_keyboard[0];
+    await ctx.editMessageReplyMarkup({ reply_markup: { inline_keyboard: [first, ...rows.slice(1)] } });
   } catch (error) {
     // "message is not modified" when a button is tapped twice; nothing to fix.
     if (!/not modified/i.test(error.message)) throw error;

@@ -19,7 +19,18 @@ export function createApp({
 } = {}) {
   const app = express();
 
-  app.use(helmet());
+  // Photos are served from Supabase Storage, so the board page may load images from there.
+  const imageHosts = config.supabaseUrl ? [new URL(config.supabaseUrl).origin] : [];
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          ...helmet.contentSecurityPolicy.getDefaultDirectives(),
+          'img-src': ["'self'", 'data:', 'blob:', ...imageHosts]
+        }
+      }
+    })
+  );
   app.use(express.json({ limit: '256kb' }));
 
   app.get('/health', (_request, response) => {

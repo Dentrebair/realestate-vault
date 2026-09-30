@@ -21,6 +21,12 @@ About ten minutes. Two windows: Telegram on a phone or laptop, and the lead boar
 | 6 | Tap **📅 Book Site Visit** | "Site visit request noted", a share-your-number button, and an alert in the Sales desk chat. Board: **Ready for site visit**. | Hand-off |
 | 7 | `node scripts/seed-test-leads.js --adopt 043 <id>`, then send `show me something cheaper` | It already knows the area and budget and does not ask again. | Memory across conversations |
 
+## Photos (once some are uploaded)
+
+In the board, open **Listings**, pick a property, and add three or four photos. Then in Telegram search for that property
+(for example `2BHK in OMR` for the Navalur flat). The card arrives as a photo with its details underneath. Tap **▶** to
+flip through the photos in place; the counter shows 📷 2/4. The photo changes but the details and buttons stay.
+
 ## Extras if there is time
 
 - Board: open the lead, read the history (who moved it and why), move a stage by hand.

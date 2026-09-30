@@ -254,7 +254,7 @@ async function searchTool({ input, supabase, api, chatId, lead, state }) {
   const result = await searchProperties(supabase, filters);
   if (!result.configured) return { error: result.message };
 
-  const views = await sendSearchResult(api, chatId, result, lead);
+  const views = await sendSearchResult({ api, supabase, chatId, result, lead });
   state.shown = rememberShown(views);
   state.unavailable = result.unavailable;
 

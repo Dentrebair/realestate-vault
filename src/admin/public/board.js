@@ -7,7 +7,7 @@
   };
   const REFRESH_MS = 5000;
 
-  const state = { me: null, showTests: true, openId: null, timer: null };
+  const state = { me: null, showTests: true, openId: null, openListing: null, timer: null, view: 'leads', listings: [] };
   const $ = (id) => document.getElementById(id);
 
   function el(tag, attrs = {}, ...children) {
@@ -102,12 +102,13 @@
     $('who').textContent = `${state.me.email} (${state.me.role})`;
     const linked = /^#lead=(.+)$/.exec(location.hash);
     if (linked) openDrawer(decodeURIComponent(linked[1]));
-    refresh();
+    setView(state.view);
     clearInterval(state.timer);
     state.timer = setInterval(() => { if (!document.hidden) refresh(); }, REFRESH_MS);
   }
 
   async function refresh() {
+    if (state.view !== 'leads') return;
     try {
       const tests = state.showTests ? '1' : '0';
       const [board, demand] = await Promise.all([api(`/board?tests=${tests}`), api(`/demand?tests=${tests}`)]);
@@ -171,6 +172,7 @@
 
   function closeDrawer() {
     state.openId = null;
+    state.openListing = null;
     if (location.hash) history.replaceState(null, '', location.pathname);
     $('drawer').hidden = true;
     $('scrim').hidden = true;
@@ -265,6 +267,150 @@
       el('span', { text: text }),
       e.note && e.type === 'stage_changed' && el('span', { class: 'muted', text: `“${e.note}”` }),
       el('span', { class: 'when', text: `${timeAgo(e.at)}${who ? ` · ${who}` : ''}` }));
+  }
+
+  // ---- listings and their photos ----------------------------------------------------------------
+
+  function setView(view) {
+    state.view = view;
+    $('leads-view').hidden = view !== 'leads';
+    $('listings-view').hidden = view !== 'listings';
+    $('tests-toggle').hidden = view !== 'leads';
+    $('tab-leads').setAttribute('aria-current', view === 'leads' ? 'page' : 'false');
+    $('tab-listings').setAttribute('aria-current', view === 'listings' ? 'page' : 'false');
+    closeDrawer();
+    if (view === 'leads') refresh(); else loadListings();
+  }
+
+  $('tab-leads').addEventListener('click', () => setView('leads'));
+  $('tab-listings').addEventListener('click', () => setView('listings'));
+  $('listing-search').addEventListener('input', renderListings);
+
+  async function loadListings() {
+    try {
+      state.listings = (await api('/properties')).properties;
+      renderListings();
+    } catch (e) {
+      if (e.message !== 'signed out') notice(`Could not load listings: ${e.message}`, true);
+    }
+  }
+
+  function renderListings() {
+    const needle = $('listing-search').value.trim().toLowerCase();
+    const shown = state.listings.filter((p) => !needle || [p.title, p.location, p.category].join(' ').toLowerCase().includes(needle));
+    const withPhotos = state.listings.filter((p) => p.photoCount > 0).length;
+    $('totals').textContent = `${state.listings.length} listings, ${withPhotos} with photos`;
+
+    $('listing-list').replaceChildren(...(shown.length ? shown.map((p) =>
+      el('button', { class: 'listing', type: 'button', onclick: () => openListing(p.id) },
+        p.cover ? el('img', { class: 'thumb', src: p.cover, alt: '', loading: 'lazy' }) : el('span', { class: 'thumb', text: 'No photo' }),
+        el('span', {},
+          el('span', { class: 'listing-title', text: p.title }), el('br'),
+          el('span', { class: 'listing-meta', text: [p.location, p.category, p.price].filter(Boolean).join(' · ') }), el('br'),
+          p.photoCount > 0
+            ? el('span', { class: 'badge photos', text: `${p.photoCount} photo${p.photoCount === 1 ? '' : 's'}` })
+            : el('span', { class: 'badge nophoto', text: 'No photos yet' })))
+    ) : [el('p', { class: 'muted', text: 'No listings match.' })]));
+  }
+
+  function openListing(id) {
+    state.openListing = id;
+    state.openId = null;
+    $('drawer').hidden = false;
+    $('scrim').hidden = false;
+    $('drawer').replaceChildren(el('p', { class: 'muted', text: 'Loading…' }));
+    loadPhotoPanel(id);
+  }
+
+  async function loadPhotoPanel(id) {
+    try {
+      const data = await api(`/properties/${encodeURIComponent(id)}/photos`);
+      if (state.openListing === id) renderPhotoPanel(data);
+    } catch (e) {
+      if (e.message !== 'signed out') $('drawer').replaceChildren(el('p', { class: 'error', text: e.message }), el('button', { type: 'button', onclick: closeDrawer, text: 'Close' }));
+    }
+  }
+
+  // Shrink to at most 1600 px and re-encode. Keeps uploads small, and drops the location data phones put in photos.
+  async function shrink(file) {
+    const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' });
+    const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const context = canvas.getContext('2d');
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    if (bitmap.close) bitmap.close();
+    return new Promise((resolve, reject) =>
+      canvas.toBlob((blob) => (blob ? resolve(blob) : reject(new Error('could not process this image'))), 'image/jpeg', 0.85));
+  }
+
+  function renderPhotoPanel(data) {
+    const isAdmin = state.me?.role === 'admin';
+    const id = data.property.id;
+    const photos = data.photos;
+    const status = el('span', { class: 'muted', id: 'upload-status', role: 'status' });
+    const fileInput = el('input', { type: 'file', accept: 'image/jpeg,image/png,image/webp', multiple: true, 'aria-label': 'Choose photos' });
+
+    const uploadFiles = async () => {
+      const files = [...fileInput.files];
+      if (!files.length) return;
+      const room = data.max - photos.length;
+      if (files.length > room) { status.textContent = `There is room for ${room} more photo${room === 1 ? '' : 's'}.`; return; }
+      fileInput.disabled = true;
+      let done = 0;
+      for (const file of files) {
+        status.textContent = `Uploading ${done + 1} of ${files.length}…`;
+        try {
+          const blob = await shrink(file);
+          await api(`/properties/${encodeURIComponent(id)}/photos`, { method: 'POST', headers: { 'Content-Type': 'image/jpeg' }, body: blob });
+          done += 1;
+        } catch (e) {
+          notice(`${file.name}: ${e.message === 'signed out' ? 'signed out' : e.message}`, true);
+          break;
+        }
+      }
+      if (done) notice(`${done} photo${done === 1 ? '' : 's'} added.`);
+      loadListings();
+      loadPhotoPanel(id);
+    };
+    fileInput.addEventListener('change', uploadFiles);
+
+    const reorder = async (from, to) => {
+      const ids = photos.map((p) => p.id);
+      [ids[from], ids[to]] = [ids[to], ids[from]];
+      try { await api(`/properties/${encodeURIComponent(id)}/photos/order`, { method: 'POST', body: JSON.stringify({ ids }) }); loadListings(); loadPhotoPanel(id); }
+      catch (e) { notice(e.message, true); }
+    };
+    const remove = async (photo) => {
+      if (!confirm('Delete this photo?')) return;
+      try { await api(`/properties/${encodeURIComponent(id)}/photos/${photo.id}`, { method: 'DELETE' }); loadListings(); loadPhotoPanel(id); }
+      catch (e) { notice(e.message, true); }
+    };
+
+    $('drawer').replaceChildren(...[
+      el('div', { class: 'drawer-head' },
+        el('div', {}, el('h1', { text: data.property.title }), el('p', { class: 'muted', text: [data.property.location, data.property.status].filter(Boolean).join(' · ') })),
+        el('button', { type: 'button', onclick: closeDrawer, text: 'Close' })),
+      el('section', { class: 'box' },
+        el('h3', { text: `Photos (${photos.length} of ${data.max})` }),
+        el('p', { class: 'muted', text: 'The first photo is the cover on the Telegram card. Customers flip through the rest with the arrow buttons.' }),
+        isAdmin
+          ? el('div', { class: 'upload-row' }, fileInput, status)
+          : el('p', { class: 'muted', text: 'Your account can view photos but not change them.' }),
+        photos.length
+          ? el('div', { class: 'photo-grid' }, photos.map((photo, index) =>
+              el('div', { class: 'photo' },
+                el('img', { src: photo.url, alt: `Photo ${index + 1} of ${data.property.title}`, loading: 'lazy' }),
+                index === 0 && el('span', { class: 'badge stage cover', style: '--stage: var(--site_visit_ready)', text: 'Cover' }),
+                isAdmin && el('div', { class: 'photo-tools' },
+                  el('button', { type: 'button', 'aria-label': 'Move earlier', disabled: index === 0, onclick: () => reorder(index, index - 1), text: '◀' }),
+                  el('button', { type: 'button', 'aria-label': 'Delete photo', onclick: () => remove(photo), text: '✕' }),
+                  el('button', { type: 'button', 'aria-label': 'Move later', disabled: index === photos.length - 1, onclick: () => reorder(index, index + 1), text: '▶' })))))
+          : el('p', { class: 'muted', text: 'No photos yet.' }))
+    ].filter(Boolean));
   }
 
   // ---- first load ----------------------------------------------------------------------------

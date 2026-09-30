@@ -100,7 +100,8 @@ export function checksFor(n, r) {
       need(s.category === 'residential', 'category was not residential');
       need(/triplicane/i.test(s.location ?? ''), 'location was not Triplicane');
       need(inr(s.maxBudget) === 20000000, 'budget was not 2 crore');
-      need(hasCard(/Heritage Residential Bungalow/), 'did not offer the Alwarpet bungalow as nearby');
+      need(hasCard(/Close option/), 'did not offer a close option');
+      need(!hasCard(/Matches your requirements/), 'called a close option a match');
     },
     '015': () => {
       need(/team|sales/i.test(replies), 'did not hand pricing to the sales team');

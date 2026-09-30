@@ -102,3 +102,28 @@ input, select { border: 1px solid var(--line); background: var(--panel); border-
   .board { grid-auto-columns: 84%; scroll-snap-type: x mandatory; }
   .column { scroll-snap-align: start; }
 }
+
+.tabs { display: flex; gap: 4px; background: var(--line); padding: 3px; border-radius: 10px; }
+.tabs button { border: 0; background: transparent; padding: 6px 14px; border-radius: 8px; color: var(--muted); font-weight: 600; }
+.tabs button[aria-current="page"] { background: var(--panel); color: var(--text); box-shadow: var(--shadow); }
+
+.listings { padding: 0 16px 32px; }
+.listings-head { display: flex; justify-content: space-between; align-items: end; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.listings-head input { min-width: 240px; }
+.listing-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.listing { display: grid; grid-template-columns: 84px 1fr; gap: 12px; align-items: center; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 8px; cursor: pointer; text-align: left; width: 100%; box-shadow: var(--shadow); }
+.listing:hover { border-color: var(--accent); }
+.thumb { width: 84px; height: 64px; border-radius: 8px; object-fit: cover; background: var(--line); display: grid; place-items: center; color: var(--muted); font-size: 11px; }
+.listing-title { font-weight: 600; overflow-wrap: anywhere; }
+.listing-meta { font-size: 12px; color: var(--muted); }
+.badge.photos { background: color-mix(in srgb, var(--site_visit_ready) 16%, transparent); color: var(--site_visit_ready); }
+.badge.nophoto { background: color-mix(in srgb, var(--negotiating) 16%, transparent); color: var(--negotiating); }
+
+.photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 10px; margin-top: 10px; }
+.photo { position: relative; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.photo img { display: block; width: 100%; aspect-ratio: 4 / 3; object-fit: cover; }
+.photo .cover { position: absolute; top: 6px; left: 6px; background: var(--panel); box-shadow: var(--shadow); }
+.photo-tools { display: flex; justify-content: space-between; gap: 4px; padding: 6px; }
+.photo-tools button { padding: 3px 9px; }
+.upload-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.upload-row input[type="file"] { max-width: 100%; }

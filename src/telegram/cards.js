@@ -4,7 +4,17 @@ import { escapeHtml as esc } from './html.js';
 
 const MAX_HIGHLIGHTS = 4;
 
-export function renderCard(view) {
+// A photo caption may be at most 1024 characters. Optional lines are dropped from the end until it fits.
+export const CAPTION_LIMIT = 1000;
+
+export function renderCard(view, { maxLength } = {}) {
+  let highlights = MAX_HIGHLIGHTS;
+  let text = buildCard(view, highlights);
+  while (maxLength && text.length > maxLength && highlights > 0) text = buildCard(view, --highlights);
+  return maxLength && text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function buildCard(view, highlightCount) {
   const tags = {
     recommendation: '💡 <b>Close option</b>',
     saved: '⭐ <b>Your shortlist</b>',
@@ -22,7 +32,7 @@ export function renderCard(view) {
   if (view.status !== 'available') facts.push(esc(view.statusLabel));
   if (facts.length) lines.push(`🏠 ${facts.join(' · ')}`);
 
-  for (const h of view.highlights.slice(0, MAX_HIGHLIGHTS)) {
+  for (const h of view.highlights.slice(0, highlightCount)) {
     lines.push(`• ${esc(h.label)}: ${esc(h.value)}`);
   }
   if (view.rera) lines.push(`RERA: ${esc(view.rera)}`);
@@ -32,11 +42,21 @@ export function renderCard(view) {
   return lines.join('\n');
 }
 
-export function cardKeyboard(propertyId, { saved = false } = {}) {
+// `photo` is { index, total } when the card is a photo with a gallery: a second row steps through it.
+export function cardKeyboard(propertyId, { saved = false, photo = null } = {}) {
   const keyboard = new InlineKeyboard().text('📅 Book Site Visit', `action:visit:${propertyId}`);
-  return saved
-    ? keyboard.text('✅ Saved (remove)', `action:unsave:${propertyId}`)
-    : keyboard.text('⭐ Shortlist', `action:save:${propertyId}`);
+  if (saved) keyboard.text('✅ Saved (remove)', `action:unsave:${propertyId}`);
+  else keyboard.text('⭐ Shortlist', `action:save:${propertyId}`);
+
+  if (photo && photo.total > 1) {
+    const step = (to) => `action:ph:${propertyId}:${(to + photo.total) % photo.total}`;
+    keyboard
+      .row()
+      .text('◀', step(photo.index - 1))
+      .text(`📷 ${photo.index + 1}/${photo.total}`, 'action:noop')
+      .text('▶', step(photo.index + 1));
+  }
+  return keyboard;
 }
 
 export function moreKeyboard() {

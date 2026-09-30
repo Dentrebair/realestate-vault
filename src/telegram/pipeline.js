@@ -3,6 +3,7 @@ import { setBotState, setStage } from '../leadMemory.js';
 import { runAgentTurn } from './agent.js';
 import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, RATE_LIMITED, TOO_LONG } from './copy.js';
 import { loadHistory, saveMessage } from './history.js';
+import { log } from './log.js';
 import { isNegotiation } from './intent.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { failureAlert, notifySales } from './sales.js';
@@ -74,8 +75,4 @@ function keepTyping(api, chatId) {
   return () => clearInterval(timer);
 }
 
-export function log(event, fields = {}, level = 'info') {
-  if (process.env.QUIET_LOGS) return;
-  const line = JSON.stringify({ at: new Date().toISOString(), event, ...fields });
-  (level === 'error' ? console.error : console.log)(line);
-}
+export { log };

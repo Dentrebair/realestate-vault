@@ -9,7 +9,9 @@
     "start": "node src/server.js",
     "test": "node --test test/*.test.js",
     "seed:test-leads": "node scripts/seed-test-leads.js",
-    "eval": "node evals/run.js"
+    "eval": "node evals/run.js",
+    "demo:reset": "node scripts/seed-test-leads.js --clean && node scripts/seed-test-leads.js",
+    "add-staff": "node scripts/add-staff.js"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.83",

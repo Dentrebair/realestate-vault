@@ -141,7 +141,10 @@ async function adopt(personaId, telegramId, properties) {
   const { rows } = build(properties);
   const row = { ...rows.find((r) => r.customer_id === persona.id), customer_id: `telegram:${telegramId}` };
   await assertTableExists();
-  await check(supabase.from('customer_leads').upsert(row, { onConflict: 'customer_id' }), 'adopt');
+  // Start the conversation clean: no old messages, history or bot memory from before.
+  await check(supabase.from('chat_messages').delete().eq('customer_id', row.customer_id), 'clear messages');
+  await check(supabase.from('lead_events').delete().eq('customer_id', row.customer_id), 'clear events');
+  await check(supabase.from('customer_leads').upsert({ ...row, bot_state: {}, phone: null }, { onConflict: 'customer_id' }), 'adopt');
   console.log(`telegram:${telegramId} now has the profile of ${persona.name} (${persona.id}), stage ${persona.stage}.`);
   console.log(`Message to type: ${JSON.stringify(persona.messages)}`);
   console.log(`Expected: ${persona.expect}`);

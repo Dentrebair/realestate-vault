@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Lead board</title>
+  <link rel="stylesheet" href="board.css">
+</head>
+<body>
+  <section id="login" class="login" hidden>
+    <form id="login-form" class="login-card" novalidate>
+      <h1>Lead board</h1>
+      <p class="muted">Sign in with your staff account.</p>
+      <label>Email<input id="login-email" type="email" autocomplete="username" required></label>
+      <label>Password<input id="login-password" type="password" autocomplete="current-password" required></label>
+      <p id="login-error" class="error" role="alert" hidden></p>
+      <button type="submit" class="primary">Sign in</button>
+    </form>
+  </section>
+
+  <main id="app" hidden>
+    <header class="top">
+      <div>
+        <h1>Lead board</h1>
+        <p class="muted" id="totals"></p>
+      </div>
+      <div class="top-right">
+        <label class="toggle"><input id="show-tests" type="checkbox" checked> Show test leads</label>
+        <span id="who" class="who"></span>
+        <button id="logout" type="button">Sign out</button>
+      </div>
+    </header>
+
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div id="board" class="board" aria-label="Leads by stage"></div>
+
+    <section class="demand">
+      <h2>Asked for, but not fully available</h2>
+      <p class="muted">Searches that found no exact match. This is demand the inventory could not meet.</p>
+      <ol id="demand-list" class="demand-list"></ol>
+    </section>
+  </main>
+
+  <div id="scrim" class="scrim" hidden></div>
+  <aside id="drawer" class="drawer" aria-label="Lead details" hidden></aside>
+
+  <script src="board.js"></script>
+</body>
+</html>

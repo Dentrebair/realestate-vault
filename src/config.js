@@ -8,6 +8,7 @@ const configSchema = z.object({
   nodeEnv: z.string().default('development'),
   supabaseUrl: z.string().url().optional(),
   supabaseServiceRoleKey: z.string().min(1).optional(),
+  supabaseAnonKey: z.string().min(1).optional(),
   connectorBearerToken: z.string().min(1).optional(),
   supabaseSchema: z.string().min(1).default('public'),
   propertiesTable: z.string().min(1).default('properties'),
@@ -26,6 +27,9 @@ const configSchema = z.object({
   openaiReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high']).default('minimal'),
   agentTimeoutMs: z.coerce.number().int().positive().default(25000),
 
+  // Who may read the actual conversation on the lead board: test leads only, everyone, or nobody.
+  boardShowConversations: z.enum(['test', 'all', 'none']).default('test'),
+
   // The WhatsApp-style tool routes are open to whoever holds the bearer token.
   enableToolRoutes: z.boolean()
 });
@@ -38,6 +42,7 @@ export const config = configSchema.parse({
   nodeEnv,
   supabaseUrl: blank(process.env.SUPABASE_URL),
   supabaseServiceRoleKey: blank(process.env.SUPABASE_SERVICE_ROLE_KEY),
+  supabaseAnonKey: blank(process.env.SUPABASE_ANON_KEY),
   connectorBearerToken: blank(process.env.CONNECTOR_BEARER_TOKEN),
   supabaseSchema: blank(process.env.SUPABASE_SCHEMA),
   propertiesTable: blank(process.env.PROPERTIES_TABLE),
@@ -53,6 +58,8 @@ export const config = configSchema.parse({
   openaiModel: blank(process.env.OPENAI_MODEL),
   openaiReasoningEffort: blank(process.env.OPENAI_REASONING_EFFORT),
   agentTimeoutMs: blank(process.env.AGENT_TIMEOUT_MS),
+
+  boardShowConversations: blank(process.env.BOARD_SHOW_CONVERSATIONS),
 
   enableToolRoutes:
     blank(process.env.ENABLE_TOOL_ROUTES) !== undefined

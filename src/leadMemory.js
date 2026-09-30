@@ -119,7 +119,7 @@ export async function upsertLeadMemory(supabase, payload, { actor = 'api' } = {}
 }
 
 // Moves a Lead to another stage if the rules allow it, and records why.
-export async function setStage(supabase, customerId, to, { actor, reason, propertyId } = {}) {
+export async function setStage(supabase, customerId, to, { actor, reason, propertyId, by } = {}) {
   const row = await fetchLeadRow(supabase, customerId);
   if (!row) throw notFound(customerId);
 
@@ -142,7 +142,7 @@ export async function setStage(supabase, customerId, to, { actor, reason, proper
     toStage: to,
     propertyId,
     note: reason,
-    payload: { actor }
+    payload: { actor, ...(by ? { by } : {}) }
   });
   return { changed: true, from, to };
 }

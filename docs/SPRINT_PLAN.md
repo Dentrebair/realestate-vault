@@ -132,14 +132,27 @@ Status: built and verified on 2026-10-01 on a laptop. Railway deploy moved to af
 
 ## Sprint P3: Lead board and demo polish
 
-- [ ] Read-only **lead board** at `/admin`, protected by `ADMIN_TOKEN`: six columns by stage, each card showing name, requirement summary, shortlist, last activity, and a detail view with the event timeline.
-- [ ] Stage change from the board (forward moves, `closed`, `not_interested`), recorded in `lead_events`.
-- [ ] Filter to show or hide test leads.
-- [ ] Full eval run across all 50 test leads; fix prompt problems in `systemPrompt.js` or a test, not by coaching in chat.
-- [ ] Demo script rehearsal with `--adopt` (chat as a chosen test lead); reset with `--clean` and reseed.
-- [ ] README: setup, environment variables, seed commands, how to run the demo.
+Status: built 2026-10-01. One step is waiting on you (creating the first staff account). 110 tests pass.
 
-**Done when:** scenes 1 to 7 work end to end, the board shows stage movements made in the chat within a few seconds, and the eval set passes.
+- [x] Lead board at `/admin/` ([src/admin/](../src/admin/)): six stage columns with counts, cards with requirement summary, saved count, number-shared flag, campaign source and last activity; refreshes every 5 seconds; test leads can be hidden.
+- [x] Real staff accounts: Supabase Auth email and password, checked by the server. Tokens live in HttpOnly, SameSite=Strict cookies and renew themselves; a `staff` allowlist table decides who may enter and whether they are an admin or a viewer; sign-ups can be switched off; repeated wrong passwords are throttled; login needs JSON, so a cross-site form cannot post it.
+- [x] Lead detail panel: requirements, noted facts, shortlist with property names and prices, history (who moved it and why), and the conversation where policy allows. Deep links: `/admin/#lead=<id>`.
+- [x] Stage change from the board (admins only): any stage, including corrections backwards, recorded as a board move with who made it and a reason.
+- [x] "Asked for, but not fully available": zero-result searches grouped by what was asked, most asked first.
+- [x] Conversation policy (`BOARD_SHOW_CONVERSATIONS`: `test`, `all` or `none`), default test leads only. To be decided for real customers before launch.
+- [x] Customer text is only ever shown as plain text (a test guards against `innerHTML` and similar).
+- [x] `npm run demo:reset`; `--adopt` now also clears the old conversation and history so a demo starts clean.
+- [x] README, demo script ([docs/DEMO.md](DEMO.md)), updated `.env.example`.
+- [x] Full eval run across all 50 leads: done in Sprint P2 (149 of 150 lead-runs passed).
+- [ ] **You:** run `sql/002_admin.sql`, create your account in Supabase Auth, run `npm run add-staff -- you@email.com admin`, then sign in and rehearse [docs/DEMO.md](DEMO.md). Until then the sign-in has only been tested against a stand-in for Supabase Auth, not the real one.
+- [ ] Rehearsal of scenes 4 to 7 on the live bot (scenes 1 to 3 and the discount and visit steps were tried live earlier).
+
+**Done when:** scenes 1 to 7 work end to end and the board shows stage changes from the chat within a few seconds.
+
+**Choices worth knowing about**
+- The board is served by the same app as the bot, so one deploy covers both.
+- Phone numbers are shown only in a lead's detail panel, never on the cards.
+- The board shows stage history, not a live chat. Nothing on the board can send a message to a customer.
 
 ---
 

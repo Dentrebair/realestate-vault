@@ -1,0 +1,280 @@
+// The lead board. Everything that comes from customers is shown with textContent, never as HTML.
+(() => {
+  const STAGES = ['initiated', 'interested', 'negotiating', 'site_visit_ready', 'closed', 'not_interested'];
+  const LABELS = {
+    initiated: 'Initiated', interested: 'Interested', negotiating: 'Negotiating',
+    site_visit_ready: 'Ready for site visit', closed: 'Closed', not_interested: 'Not interested'
+  };
+  const REFRESH_MS = 5000;
+
+  const state = { me: null, showTests: true, openId: null, timer: null };
+  const $ = (id) => document.getElementById(id);
+
+  function el(tag, attrs = {}, ...children) {
+    const node = document.createElement(tag);
+    for (const [key, value] of Object.entries(attrs)) {
+      if (value === null || value === undefined || value === false) continue;
+      if (key === 'class') node.className = value;
+      else if (key === 'text') node.textContent = value;
+      else if (key.startsWith('on')) node.addEventListener(key.slice(2), value);
+      else node.setAttribute(key, value === true ? '' : value);
+    }
+    for (const child of children.flat()) {
+      if (child === null || child === undefined || child === false) continue;
+      node.append(child.nodeType ? child : document.createTextNode(String(child)));
+    }
+    return node;
+  }
+
+  async function api(path, options = {}) {
+    const response = await fetch(`/admin/api${path}`, {
+      credentials: 'same-origin',
+      ...options,
+      headers: { ...(options.body ? { 'Content-Type': 'application/json' } : {}), ...(options.headers ?? {}) }
+    });
+    let body = null;
+    try { body = await response.json(); } catch { /* no body */ }
+    if (response.status === 401) { showLogin(); throw new Error('signed out'); }
+    if (!response.ok) { const error = new Error(body?.message ?? body?.error ?? `Request failed (${response.status})`); error.status = response.status; error.body = body; throw error; }
+    return body;
+  }
+
+  function timeAgo(iso) {
+    if (!iso) return '';
+    const seconds = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+    if (seconds < 60) return 'just now';
+    if (seconds < 3600) return `${Math.floor(seconds / 60)} min ago`;
+    if (seconds < 86400) return `${Math.floor(seconds / 3600)} h ago`;
+    return `${Math.floor(seconds / 86400)} d ago`;
+  }
+
+  function notice(message, bad = false) {
+    const box = $('notice');
+    box.textContent = message;
+    box.className = bad ? 'notice bad' : 'notice';
+    box.hidden = !message;
+    if (message) setTimeout(() => { if (box.textContent === message) box.hidden = true; }, 4000);
+  }
+
+  // ---- sign in -------------------------------------------------------------------------------
+
+  function showLogin() {
+    clearInterval(state.timer);
+    closeDrawer();
+    $('app').hidden = true;
+    $('login').hidden = false;
+    $('login-email').focus();
+  }
+
+  $('login-form').addEventListener('submit', async (event) => {
+    event.preventDefault();
+    const error = $('login-error');
+    error.hidden = true;
+    try {
+      state.me = await api('/login', {
+        method: 'POST',
+        body: JSON.stringify({ email: $('login-email').value, password: $('login-password').value })
+      });
+      $('login-password').value = '';
+      start();
+    } catch (e) {
+      error.textContent = e.message === 'signed out' ? 'Email or password is not right.' : e.message;
+      error.hidden = false;
+    }
+  });
+
+  $('logout').addEventListener('click', async () => {
+    await api('/logout', { method: 'POST' }).catch(() => {});
+    state.me = null;
+    showLogin();
+  });
+
+  $('show-tests').addEventListener('change', (event) => {
+    state.showTests = event.target.checked;
+    refresh();
+  });
+
+  // ---- board ---------------------------------------------------------------------------------
+
+  function start() {
+    $('login').hidden = true;
+    $('app').hidden = false;
+    $('who').textContent = `${state.me.email} (${state.me.role})`;
+    const linked = /^#lead=(.+)$/.exec(location.hash);
+    if (linked) openDrawer(decodeURIComponent(linked[1]));
+    refresh();
+    clearInterval(state.timer);
+    state.timer = setInterval(() => { if (!document.hidden) refresh(); }, REFRESH_MS);
+  }
+
+  async function refresh() {
+    try {
+      const tests = state.showTests ? '1' : '0';
+      const [board, demand] = await Promise.all([api(`/board?tests=${tests}`), api(`/demand?tests=${tests}`)]);
+      renderBoard(board);
+      renderDemand(demand);
+      if (state.openId && !$('drawer').hidden) loadDetail(state.openId, { quiet: true });
+    } catch (e) {
+      if (e.message !== 'signed out') notice(`Could not refresh: ${e.message}`, true);
+    }
+  }
+
+  function renderBoard(board) {
+    $('totals').textContent = `${board.total} lead${board.total === 1 ? '' : 's'}`;
+    const columns = board.columns.map((column) =>
+      el('section', { class: 'column', style: `--stage: var(--${column.stage})`, 'aria-label': column.label },
+        el('h2', {}, column.label, el('span', { class: 'count', text: String(column.count) })),
+        column.leads.length
+          ? el('div', { class: 'cards' }, column.leads.map(renderCard))
+          : el('p', { class: 'empty', text: 'No leads' })
+      )
+    );
+    $('board').replaceChildren(...columns);
+  }
+
+  function renderCard(lead) {
+    return el('button', { class: 'card', type: 'button', onclick: () => openDrawer(lead.id) },
+      el('span', { class: 'card-name' },
+        lead.name,
+        lead.isTest && el('span', { class: 'badge test', text: 'TEST' }),
+        lead.handle && el('span', { class: 'card-handle', text: `@${lead.handle}` })),
+      el('span', { class: 'card-summary', text: lead.summary }),
+      el('span', { class: 'card-meta' },
+        lead.shortlistCount > 0 && el('span', { text: `⭐ ${lead.shortlistCount} saved` }),
+        lead.hasPhone && el('span', { text: '📞 number shared' }),
+        lead.source && el('span', { text: `from ${lead.source}` }),
+        el('span', { text: timeAgo(lead.lastContactedAt) })));
+  }
+
+  function renderDemand(demand) {
+    const list = $('demand-list');
+    if (!demand.items.length) {
+      list.replaceChildren(el('li', {}, el('span', { class: 'muted', text: 'Nothing yet. Every search so far found an exact match.' })));
+      return;
+    }
+    list.replaceChildren(...demand.items.map((item) =>
+      el('li', {},
+        el('span', { text: item.request }),
+        el('span', { class: 'muted', text: `${item.count} search${item.count === 1 ? '' : 'es'} · ${item.customers} customer${item.customers === 1 ? '' : 's'}` }))));
+  }
+
+  // ---- one lead ------------------------------------------------------------------------------
+
+  function openDrawer(id) {
+    state.openId = id;
+    history.replaceState(null, '', `#lead=${encodeURIComponent(id)}`);
+    $('drawer').hidden = false;
+    $('scrim').hidden = false;
+    $('drawer').replaceChildren(el('p', { class: 'muted', text: 'Loading…' }));
+    loadDetail(id);
+  }
+
+  function closeDrawer() {
+    state.openId = null;
+    if (location.hash) history.replaceState(null, '', location.pathname);
+    $('drawer').hidden = true;
+    $('scrim').hidden = true;
+  }
+
+  $('scrim').addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeDrawer(); });
+
+  async function loadDetail(id, { quiet = false } = {}) {
+    // Do not redraw under someone who is typing a reason.
+    if (quiet && $('drawer').contains(document.activeElement) && document.activeElement.tagName === 'INPUT') return;
+    try {
+      const lead = await api(`/leads/${encodeURIComponent(id)}`);
+      if (state.openId === id) renderDetail(lead);
+    } catch (e) {
+      if (e.message !== 'signed out') $('drawer').replaceChildren(el('p', { class: 'error', text: e.message }), el('button', { type: 'button', onclick: closeDrawer, text: 'Close' }));
+    }
+  }
+
+  function renderDetail(lead) {
+    const isAdmin = state.me?.role === 'admin';
+    const r = lead.requirements;
+    const rows = [
+      ['Looking for', r.summary], ['Intent', r.intent], ['Timeline', r.urgency], ['Financing', r.financing],
+      ['Must have', r.mustHaves.join(', ')], ['Will not accept', r.dealBreakers.join(', ')],
+      ['Last request', r.lastQuery], ['Next step', r.nextAction], ['Phone', lead.phone], ['Came from', lead.source]
+    ].filter(([, value]) => value);
+
+    const stageSelect = el('select', { id: 'move-stage', 'aria-label': 'Move to stage' },
+      STAGES.map((stage) => el('option', { value: stage, selected: stage === lead.stage, text: LABELS[stage] })));
+    const reason = el('input', { id: 'move-reason', type: 'text', maxlength: '200', placeholder: 'Why? (optional)', 'aria-label': 'Reason' });
+    const moveButton = el('button', { type: 'button', class: 'primary', text: 'Move', onclick: async () => {
+      moveButton.disabled = true;
+      try {
+        await api(`/leads/${encodeURIComponent(lead.id)}/stage`, { method: 'POST', body: JSON.stringify({ stage: stageSelect.value, reason: reason.value }) });
+        notice(`${lead.name} moved to ${LABELS[stageSelect.value]}.`);
+        refresh();
+      } catch (e) {
+        notice(e.body?.reason ? `Not moved: ${e.body.reason}` : e.message, true);
+      } finally { moveButton.disabled = false; }
+    } });
+
+    $('drawer').replaceChildren(...[
+      el('div', { class: 'drawer-head' },
+        el('div', {},
+          el('h1', {}, lead.name, ' ', lead.isTest && el('span', { class: 'badge test', text: 'TEST' })),
+          el('p', { class: 'muted', text: [lead.handle && `@${lead.handle}`, lead.id].filter(Boolean).join(' · ') }),
+          el('p', {}, el('span', { class: 'badge stage', style: `--stage: var(--${lead.stage})`, text: LABELS[lead.stage] }))),
+        el('button', { type: 'button', onclick: closeDrawer, 'aria-label': 'Close', text: 'Close' })),
+
+      el('section', { class: 'box move' },
+        el('h3', { text: 'Stage' }),
+        isAdmin
+          ? el('div', { class: 'move-row' }, stageSelect, reason, moveButton)
+          : el('p', { class: 'muted', text: 'Your account can view leads but not move them.' })),
+
+      el('section', { class: 'box' }, el('h3', { text: 'Requirements' }),
+        el('dl', { class: 'kv' }, rows.flatMap(([k, v]) => [el('dt', { text: k }), el('dd', { text: v })]))),
+
+      lead.keyPoints.length > 0 && el('section', { class: 'box' }, el('h3', { text: 'Noted from the chat' }),
+        el('ul', {}, lead.keyPoints.map((k) => el('li', { text: k.text })))),
+
+      el('section', { class: 'box' }, el('h3', { text: `Shortlist (${lead.shortlist.length})` }),
+        lead.shortlist.length
+          ? el('ul', {}, lead.shortlist.map((p) => el('li', { text: [p.title, p.location, p.price].filter(Boolean).join(' · ') + (p.status && p.status !== 'available' ? ` (${p.status})` : '') })))
+          : el('p', { class: 'muted', text: 'Nothing saved yet.' })),
+
+      el('section', { class: 'box' }, el('h3', { text: 'History' }),
+        el('ol', { class: 'timeline' }, lead.events.map(renderEvent))),
+
+      el('section', { class: 'box' }, el('h3', { text: 'Conversation' }),
+        lead.conversationVisible
+          ? (lead.conversation.length
+              ? el('div', { class: 'chat' }, lead.conversation.map((m) => el('div', { class: `bubble ${m.role}`, text: m.content })))
+              : el('p', { class: 'muted', text: 'No messages yet.' }))
+          : el('p', { class: 'muted', text: 'Conversations of real customers are hidden on this board.' }))
+    ].filter(Boolean));
+  }
+
+  function renderEvent(e) {
+    const who = e.by ?? (e.actor && e.actor !== 'system' ? e.actor : null);
+    const property = e.property ? e.property.title : null;
+    const text = {
+      lead_created: 'First contact',
+      stage_changed: `Moved from ${LABELS[e.fromStage] ?? e.fromStage} to ${LABELS[e.toStage] ?? e.toStage}`,
+      shortlisted: `Saved ${property ?? 'a property'}`,
+      unshortlisted: `Removed ${property ?? 'a property'} from the shortlist`,
+      site_visit_requested: `Asked to visit ${property ?? 'a property'}${e.alerted ? ' · sales team alerted' : ' · sales team not yet alerted'}`,
+      zero_result: `Searched for something we could not fully match: ${e.note ?? ''}`
+    }[e.type] ?? e.type;
+    return el('li', {},
+      el('span', { text: text }),
+      e.note && e.type === 'stage_changed' && el('span', { class: 'muted', text: `“${e.note}”` }),
+      el('span', { class: 'when', text: `${timeAgo(e.at)}${who ? ` · ${who}` : ''}` }));
+  }
+
+  // ---- first load ----------------------------------------------------------------------------
+
+  (async () => {
+    try {
+      state.me = await api('/me');
+      start();
+    } catch {
+      showLogin();
+    }
+  })();
+})();

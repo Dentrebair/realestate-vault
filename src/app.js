@@ -5,6 +5,8 @@ import { config, isSupabaseConfigured } from './config.js';
 import { buildOpenAiTools, buildOpenApiDocument } from './openapi.js';
 import { leadMemorySchema, upsertLeadMemory } from './leadMemory.js';
 import { propertySearchSchema, searchProperties } from './propertySearch.js';
+import { createAdminRouter } from './admin/routes.js';
+import { createSupabaseAuth } from './admin/auth.js';
 import { createSupabaseClient } from './supabase.js';
 import { webhookHandler } from './telegram/webhook.js';
 
@@ -12,7 +14,8 @@ export function createApp({
   supabase = createSupabaseClient(),
   telegramBot = null,
   telegramSecret = config.telegramWebhookSecret,
-  enableToolRoutes = config.enableToolRoutes
+  enableToolRoutes = config.enableToolRoutes,
+  admin = defaultAdmin(supabase)
 } = {}) {
   const app = express();
 
@@ -35,6 +38,11 @@ export function createApp({
   app.get('/openai-tools.json', (_request, response) => {
     response.json(buildOpenAiTools());
   });
+
+  // The lead board for staff. Its own sign-in; it never shares a secret with the tool routes.
+  if (admin) {
+    app.use('/admin', createAdminRouter({ supabase, ...admin }));
+  }
 
   if (telegramBot) {
     app.post('/telegram/webhook', webhookHandler(telegramBot, telegramSecret));
@@ -79,6 +87,15 @@ export function createApp({
   });
 
   return app;
+}
+
+function defaultAdmin(supabase) {
+  if (!supabase || !config.supabaseUrl || !config.supabaseAnonKey) return null;
+  return {
+    auth: createSupabaseAuth({ url: config.supabaseUrl, anonKey: config.supabaseAnonKey }),
+    showConversations: config.boardShowConversations,
+    secureCookies: config.nodeEnv === 'production'
+  };
 }
 
 function sameSecret(given, expected) {

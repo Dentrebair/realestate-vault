@@ -9,7 +9,7 @@ A prospective buyer together with the profile we have saved about them (requirem
 _Avoid_: Customer, buyer, client, user
 
 **Lead stage**:
-Where a Lead is in the sales pipeline, in order: `initiated`, `interested`, `negotiating`, `site_visit_ready`, `closed`. `not_interested` is the exit from any stage. A Lead never moves backwards except to `not_interested`.
+Where a Lead is in the sales pipeline, in order: `initiated`, `interested`, `negotiating`, `site_visit_ready`, `closed`. `not_interested` is the exit from any stage. A Lead never moves backwards except to `not_interested`, and except when the Sales desk corrects a stage by hand from the lead board. An opted-out Lead who asks for properties again returns to `interested`.
 _Avoid_: Lead status, funnel stage, pipeline status
 
 **Initiated**:

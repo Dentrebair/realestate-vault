@@ -58,16 +58,16 @@ Everything else is Phase 2. The prototype runs on test leads only.
 
 ## Matching and recommendation rules
 
-A **Match** passes every stated requirement: category, area (through the micro-market alias table), budget, bedrooms, deal-breakers, and status available or under construction. Null-price listings pass a budget filter only as POR and are flagged "price unconfirmed".
+A **Match** passes every stated requirement: category and type (flat, villa, office, shop…), area (through the micro-market alias table), budget, bedrooms, deal-breakers, and status available or under construction. A listing with no price cannot be confirmed against a budget, so it is never a clean Match; it can appear as a Recommendation marked Price on Request.
 
-If there is no Match, the code relaxes one requirement at a time and returns up to three **Recommendations**, each with its differences:
+**Ranking is location first.** Candidates are sorted by distance from the requested area (same area, then near, at most 8 km, then far), and only then by how few other requirements they miss.
 
-1. Same category and area, budget up to 25% higher: "₹X Cr over your budget".
-2. Same category and area, bedrooms one more or fewer.
-3. Same category, neighbouring micro-market.
-4. Same area, other category.
+1. Never shown: sold and reserved listings, deal-breakers (for example under construction), a different category, a price more than 2× the budget, or more than 2 bedrooms off.
+2. Same area first, then near, then far.
+3. Within the same distance, fewest gaps first: related category, different type, budget (% over), bedrooms off or not listed, under construction.
+4. A **far** option is shown only if it would be a full Match except for its area. Otherwise the bot says nothing fits near the requested area and asks whether to widen the area or change the budget.
 
-Every Recommendation carries its own differences list (for example "2 bedrooms instead of 3", "₹1.8 Cr over budget", "under construction"), which appears on the card. Zero-result searches are also recorded as `lead_events` so the client can see unmet demand.
+When there is no Match the bot shows 1 to 3 Recommendations, each with its own differences list ("about 4 km from OMR", "₹1.8 Cr over your budget", "1 bedroom fewer", "under construction"). When there are none, the answer says which of three things is true: nothing in the area, properties in the area but above budget, or nothing fits. The response also lists sold or reserved properties that would have fitted, so the bot can say "that one is sold". Zero-result searches are recorded as `lead_events` so the client can see unmet demand.
 
 ---
 
@@ -84,17 +84,26 @@ Every Recommendation carries its own differences list (for example "2 bedrooms i
 
 ## Sprint P1: Matching engine and stages (all testable without Telegram)
 
-- [ ] Rename `lead_status` to `lead_stage` everywhere (code, OpenAPI, tool schemas) with the six stages.
-- [ ] Stage rules in one place: allowed moves, who may make them, each move written to `lead_events`.
-- [ ] Upsert becomes a true partial update (today it resets the status and wipes lists on every call).
-- [ ] `getLead`, `addToShortlist`, `removeFromShortlist`, `setStage`.
-- [ ] Search: default status filter; explicit columns instead of `*`; category normalisation to the seven real values (flat, apartment, villa → residential); `microMarkets.js` alias table (OMR covers Navalur, Sholinganallur, Perungudi, Thoraipakkam, Siruseri, Tidel Park, and so on; same for ECR, Anna Nagar, T. Nagar, Velachery); one OR across alias terms; `minBedrooms`.
-- [ ] Budget input as amount plus unit, and `formatInr` ("₹62 L", "₹4.8 Cr"). `priceDisplay` returns "Price on Request (POR)" for any null price.
-- [ ] Matching and Recommendation engine per the rules above, returning `matches[]` and `recommendations[]` with `differences[]`.
-- [ ] Tests with a fake Supabase client. A table-driven test runs the search-level cases from `test/fixtures/testLeads.js` (for example leads 011, 014, 016, 018, 019, 020, 040, 046) and checks which properties come back and which are excluded.
-- [ ] Live check on the seeded data.
+Status: built and verified on 2026-10-01, except the public-key check below. 57 tests pass.
 
-**Done when:** tests pass; the fixture cases return the expected matches and recommendations; sold and reserved listings never appear; a second upsert no longer changes the stage or wipes the shortlist.
+- [x] Rename `lead_status` to `lead_stage` everywhere (code, OpenAPI, tool schemas) with the six stages.
+- [x] Stage rules in one place ([src/stages.js](../src/stages.js)): allowed moves, who may make them, each move written to `lead_events`.
+- [x] Upsert is a true partial update. It never resets the stage or wipes lists; key points accumulate and shortlist ids only grow.
+- [x] `getLead`, `addToShortlist`, `removeFromShortlist`, `setStage` (a stage change loses to a newer write instead of overwriting it).
+- [x] Search: sold and reserved never returned; explicit columns instead of `*`; category and type words normalised (flat, villa, office, cloud kitchen…); [src/microMarkets.js](../src/microMarkets.js) with about 45 localities and approximate coordinates (OMR, ECR, GST Road, Tambaram, Anna Nagar, airport, Tidel Park…); `minBedrooms`; `offset` for Show more.
+- [x] Budget parsing (`1.5C`, `150L`, ranges, missing units, inverted ranges) and `formatInr`. `priceDisplay` returns "Price on Request (POR)" for any null price.
+- [x] Matching and Recommendation engine ([src/matching.js](../src/matching.js)): location first, at most 3 recommendations each with `differences[]`, one far option only when nothing is near, sold or reserved near-misses reported, unmet demand recorded as `zero_result` events.
+- [x] Tests with a fake Supabase client. A table-driven test runs 22 of the 50 test leads against a snapshot of the 20 live listings, plus stage, lead-store and money tests.
+- [x] Live check on the seeded data: fixture cases give the expected answers; a scratch lead kept its stage, shortlist and fields across a second upsert; the model could not create a hot lead.
+- [x] Old `sql/customer_leads.sql` removed.
+- [ ] Confirm the public (anon) Supabase key cannot read the three lead tables. Needs `SUPABASE_ANON_KEY` added to `.env` (Supabase dashboard, Settings, API).
+
+**Done when:** tests pass; the fixture cases return the expected matches and recommendations; sold and reserved listings never appear; a second upsert no longer changes the stage or wipes the shortlist. All met.
+
+**Known limits, for later:**
+- Matching runs in JavaScript over up to 1,000 listings fetched per search. Fine for 20, and worth rethinking above about 1,000.
+- Area centre points are approximate and the near threshold is 8 km straight-line. Tune both against real client feedback.
+- Only "under construction" is understood as a deal-breaker; other deal-breakers are stored but not applied to matching.
 
 ## Sprint P2: The Telegram bot
 

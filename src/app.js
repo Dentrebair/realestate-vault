@@ -1,4 +1,4 @@
-import cors from 'cors';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import helmet from 'helmet';
 import { config, isSupabaseConfigured } from './config.js';
@@ -6,19 +6,25 @@ import { buildOpenAiTools, buildOpenApiDocument } from './openapi.js';
 import { leadMemorySchema, upsertLeadMemory } from './leadMemory.js';
 import { propertySearchSchema, searchProperties } from './propertySearch.js';
 import { createSupabaseClient } from './supabase.js';
+import { webhookHandler } from './telegram/webhook.js';
 
-export function createApp({ supabase = createSupabaseClient() } = {}) {
+export function createApp({
+  supabase = createSupabaseClient(),
+  telegramBot = null,
+  telegramSecret = config.telegramWebhookSecret,
+  enableToolRoutes = config.enableToolRoutes
+} = {}) {
   const app = express();
 
   app.use(helmet());
-  app.use(cors());
   app.use(express.json({ limit: '256kb' }));
 
   app.get('/health', (_request, response) => {
     response.json({
       ok: true,
       service: 'real-estate-meta-business-agent-connector',
-      supabaseConfigured: isSupabaseConfigured
+      supabaseConfigured: isSupabaseConfigured,
+      telegramConfigured: Boolean(telegramBot)
     });
   });
 
@@ -30,62 +36,64 @@ export function createApp({ supabase = createSupabaseClient() } = {}) {
     response.json(buildOpenAiTools());
   });
 
-  app.post('/tools/search-properties', requireBearerToken, async (request, response, next) => {
-    const parsed = propertySearchSchema.safeParse(request.body ?? {});
+  if (telegramBot) {
+    app.post('/telegram/webhook', webhookHandler(telegramBot, telegramSecret));
+  }
 
-    if (!parsed.success) {
-      return response.status(400).json({
-        error: 'invalid_request',
-        details: parsed.error.flatten()
-      });
-    }
+  // The tool routes are for chat agents that call this service over HTTP (the WhatsApp setup).
+  // The Telegram bot calls the same code directly, so in production they stay off unless asked for.
+  if (enableToolRoutes) {
+    app.post('/tools/search-properties', requireBearerToken, async (request, response, next) => {
+      const parsed = propertySearchSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return response.status(400).json({ error: 'invalid_request', details: parsed.error.flatten() });
+      }
+      try {
+        return response.json(await searchProperties(supabase, parsed.data));
+      } catch (error) {
+        return next(error);
+      }
+    });
 
-    try {
-      const result = await searchProperties(supabase, parsed.data);
-      return response.json(result);
-    } catch (error) {
-      return next(error);
-    }
-  });
-
-  app.post('/tools/upsert-lead-memory', requireBearerToken, async (request, response, next) => {
-    const parsed = leadMemorySchema.safeParse(request.body ?? {});
-
-    if (!parsed.success) {
-      return response.status(400).json({
-        error: 'invalid_request',
-        details: parsed.error.flatten()
-      });
-    }
-
-    try {
-      const result = await upsertLeadMemory(supabase, parsed.data);
-      return response.json(result);
-    } catch (error) {
-      return next(error);
-    }
-  });
+    app.post('/tools/upsert-lead-memory', requireBearerToken, async (request, response, next) => {
+      const parsed = leadMemorySchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return response.status(400).json({ error: 'invalid_request', details: parsed.error.flatten() });
+      }
+      try {
+        return response.json(await upsertLeadMemory(supabase, parsed.data));
+      } catch (error) {
+        return next(error);
+      }
+    });
+  }
 
   app.use((error, _request, response, _next) => {
     const statusCode = error.statusCode ?? 500;
+    // Upstream messages can name tables and columns; keep them out of responses in production.
+    const showDetail = config.nodeEnv !== 'production' || statusCode < 500;
     response.status(statusCode).json({
       error: statusCode === 500 ? 'internal_error' : 'upstream_error',
-      message: error.message
+      message: showDetail ? error.message : 'Something went wrong.'
     });
   });
 
   return app;
 }
 
+function sameSecret(given, expected) {
+  const a = createHash('sha256').update(String(given ?? '')).digest();
+  const b = createHash('sha256').update(String(expected)).digest();
+  return timingSafeEqual(a, b);
+}
+
 function requireBearerToken(request, response, next) {
   if (!config.connectorBearerToken) {
     return next();
   }
-
-  const expected = `Bearer ${config.connectorBearerToken}`;
-  if (request.get('authorization') !== expected) {
+  const header = request.get('authorization') ?? '';
+  if (!sameSecret(header, `Bearer ${config.connectorBearerToken}`)) {
     return response.status(401).json({ error: 'unauthorized' });
   }
-
   return next();
 }

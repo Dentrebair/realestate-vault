@@ -1,0 +1,278 @@
+// One conversational turn: the model, its four tools, and the checks around what it says.
+import { generateText, isStepCount, tool } from 'ai';
+import { z } from 'zod';
+import { setBotState, setStage, upsertLeadMemory, leadMemorySchema } from '../leadMemory.js';
+import { parseAmount, toInr } from '../money.js';
+import { getProperty, searchProperties } from '../propertySearch.js';
+import { CATEGORIES } from '../propertyTypes.js';
+import { visitPrompt } from './cards.js';
+import { rememberShown, sendSearchResult } from './present.js';
+import { buildInstructions } from './systemPrompt.js';
+
+const MAX_STEPS = 4;
+const MAX_REPLY_CHARS = 1200;
+
+const money = z
+  .object({
+    amount: z.number().positive(),
+    unit: z.enum(['rupees', 'lakh', 'crore']).describe('1.5 crore is amount 1.5 with unit crore')
+  })
+  .describe('An amount of money. Never convert it yourself.');
+
+const stageChoices = ['interested', 'negotiating', 'not_interested'];
+
+export function createDeps(overrides = {}) {
+  return { generate: generateText, timeoutMs: 25000, providerOptions: undefined, ...overrides };
+}
+
+export async function runAgentTurn({ deps, supabase, api, chatId, lead, history, text }) {
+  const customerId = lead.customerId;
+  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [] };
+
+  const record = (output) => {
+    state.toolOutputs.push(JSON.stringify(output));
+    return output;
+  };
+
+  const tools = {
+    search_properties: tool({
+      description:
+        'Find properties that match what the customer wants, or the closest options with how they differ. Cards are sent to the customer automatically.',
+      inputSchema: z.object({
+        location: z.string().optional().describe('Area, corridor or landmark as the customer said it, e.g. OMR, Anna Nagar, near Tidel Park'),
+        query: z.string().optional().describe('Kind of property and features, e.g. flat, villa, penthouse, office, cloud kitchen, sea facing'),
+        category: z.enum(CATEGORIES).optional().describe('Flats, apartments, villas and houses are residential'),
+        bedrooms: z.number().int().positive().optional().describe('Exact BHK'),
+        minBedrooms: z.number().int().positive().optional().describe('At least this many BHK'),
+        minBudget: money.optional(),
+        maxBudget: money.optional(),
+        ignoreSavedBudget: z.boolean().optional().describe('True only if the customer says the saved budget no longer applies'),
+        offset: z.number().int().min(0).optional()
+      }),
+      execute: async (input) => record(await searchTool({ input, supabase, api, chatId, lead, state }))
+    }),
+
+    get_property: tool({
+      description: 'Full details of one property already shown. Use position 1 for the first card shown.',
+      inputSchema: z.object({
+        position: z.number().int().positive().optional(),
+        propertyId: z.string().optional()
+      }),
+      execute: async (input) => {
+        const id = resolveId(input, state.shown);
+        if (!id) return record({ error: 'No such property in the last results. Run search_properties.' });
+        const found = await getProperty(supabase, id);
+        if (!found) return record({ error: 'That property is no longer listed.' });
+        const { view } = found;
+        return record({
+          id: view.id, title: view.title, location: view.location, category: view.category,
+          status: view.statusLabel, price: view.priceDisplay, bedrooms: view.bedrooms,
+          highlights: view.highlights, rera: view.rera
+        });
+      }
+    }),
+
+    save_requirements: tool({
+      description:
+        'Save what the customer told you. Send only what is new or changed. Also use it to set leadStage negotiating or not_interested.',
+      inputSchema: z.object({
+        displayName: z.string().optional(),
+        intent: z.string().optional().describe('buy_residential, buy_plot, buy_commercial, invest, ...'),
+        minBudget: money.optional(),
+        maxBudget: money.optional(),
+        preferredLocations: z.array(z.string()).optional().describe('The full current list'),
+        propertyCategories: z.array(z.string()).optional().describe('The full current list'),
+        bedrooms: z.number().int().positive().optional(),
+        mustHaves: z.array(z.string()).optional().describe('The full current list'),
+        dealBreakers: z.array(z.string()).optional().describe('The full current list'),
+        urgency: z.string().optional(),
+        financingStatus: z.string().optional(),
+        leadStage: z.enum(stageChoices).optional(),
+        stageReason: z.string().optional().describe('One line: why the stage changed'),
+        keyPoints: z
+          .array(z.object({ type: z.string(), text: z.string(), confidence: z.number().min(0).max(1) }))
+          .optional(),
+        lastQuerySummary: z.string().optional(),
+        nextAction: z.string().optional().describe('What the sales team should do next')
+      }),
+      execute: async (input) => {
+        const { minBudget, maxBudget, ...rest } = withoutNulls(input);
+        const parsed = leadMemorySchema.safeParse({
+          ...rest,
+          customerId,
+          ...(minBudget ? { budgetMin: toInr(minBudget.amount, minBudget.unit) } : {}),
+          ...(maxBudget ? { budgetMax: toInr(maxBudget.amount, maxBudget.unit) } : {})
+        });
+        if (!parsed.success) return record({ saved: false, problem: parsed.error.issues[0]?.message });
+
+        const result = await upsertLeadMemory(supabase, parsed.data, { actor: 'model' });
+        return record({
+          saved: true,
+          stage: result.stage?.changed ? result.stage.to : undefined,
+          stageNotAllowed: result.stage && !result.stage.changed ? result.stage.reason : undefined
+        });
+      }
+    }),
+
+    request_site_visit: tool({
+      description:
+        'The customer wants to visit a property. Sends them a confirm button; the visit is only requested when they tap it.',
+      inputSchema: z.object({
+        position: z.number().int().positive().optional(),
+        propertyId: z.string().optional()
+      }),
+      execute: async (input) => {
+        const id = resolveId(input, state.shown);
+        const found = id ? await getProperty(supabase, id) : null;
+        if (!found || !['available', 'under_construction'].includes(found.row.status)) {
+          return record({ sent: false, problem: 'That property is not available. Run search_properties first.' });
+        }
+        const prompt = visitPrompt(found.view);
+        await api.sendMessage(chatId, prompt.text, { parse_mode: 'HTML', reply_markup: prompt.keyboard });
+        return record({
+          confirmButtonSent: true,
+          title: found.view.title,
+          tellCustomer: 'A Confirm site visit button was sent. The visit is NOT requested until they tap it. Do not say it was requested, booked or scheduled.'
+        });
+      }
+    })
+  };
+
+  const result = await deps.generate({
+    model: deps.model,
+    instructions: buildInstructions(lead),
+    messages: [...history, { role: 'user', content: text }],
+    tools,
+    stopWhen: isStepCount(MAX_STEPS),
+    abortSignal: AbortSignal.timeout(deps.timeoutMs),
+    providerOptions: deps.providerOptions
+  });
+
+  const guarded = guardAmounts(result.text ?? '', [text, JSON.stringify(leadBudgets(lead)), ...state.toolOutputs]);
+  const reply = guarded.blocked
+    ? state.shown.length
+      ? 'Please see the details in the cards above.'
+      : 'Let me check the details with our team.'
+    : guarded.text || (state.shown.length ? 'Here is what I found.' : 'Could you tell me a little more about what you are looking for?');
+
+  return {
+    text: withoutDashes(reply).slice(0, MAX_REPLY_CHARS),
+    blocked: guarded.blocked,
+    shown: state.shown,
+    usage: result.usage
+  };
+}
+
+// ---- search tool ---------------------------------------------------------------------------
+
+async function searchTool({ input, supabase, api, chatId, lead, state }) {
+  const given = withoutNulls(input);
+  const filters = {
+    customerId: lead.customerId,
+    limit: 5,
+    offset: given.offset ?? 0,
+    location: given.location,
+    query: given.query,
+    category: given.category,
+    bedrooms: given.bedrooms,
+    minBedrooms: given.minBedrooms,
+    minBudget: given.minBudget ? toInr(given.minBudget.amount, given.minBudget.unit) : undefined,
+    maxBudget: given.maxBudget ? toInr(given.maxBudget.amount, given.maxBudget.unit) : undefined,
+    dealBreakers: lead.dealBreakers?.length ? lead.dealBreakers : undefined,
+    mustHaves: lead.mustHaves?.length ? lead.mustHaves : undefined
+  };
+
+  // Hard limits the customer already gave us carry over unless they say otherwise.
+  let usedSavedBudget = false;
+  if (!given.ignoreSavedBudget) {
+    if (filters.maxBudget === undefined && lead.budgetMax) {
+      filters.maxBudget = lead.budgetMax;
+      usedSavedBudget = true;
+    }
+    if (filters.minBudget === undefined && lead.budgetMin && filters.maxBudget !== undefined) {
+      filters.minBudget = lead.budgetMin;
+      usedSavedBudget = true;
+    }
+  }
+
+  const result = await searchProperties(supabase, filters);
+  if (!result.configured) return { error: result.message };
+
+  const views = await sendSearchResult(api, chatId, result, lead);
+  state.shown = rememberShown(views);
+
+  const { customerId: _omit, offset: _offset, limit: _limit, ...remembered } = filters;
+  await setBotState(supabase, lead.customerId, {
+    shown: state.shown,
+    lastSearch: { filters: remembered, nextOffset: result.nextOffset }
+  });
+  if (views.length) {
+    await setStage(supabase, lead.customerId, 'interested', { actor: 'system', reason: 'was shown properties' });
+  }
+
+  return {
+    outcome: result.outcome,
+    guidance: result.guidance,
+    searchedFor: result.criteria.summary,
+    usedSavedBudget,
+    cardsShown: views.map((v, i) => ({
+      position: i + 1,
+      id: v.id,
+      title: v.title,
+      location: v.location,
+      price: v.priceDisplay,
+      bedrooms: v.bedrooms,
+      status: v.statusLabel,
+      differences: v.differences
+    })),
+    totalMatches: result.totalMatches,
+    moreAvailable: result.nextOffset !== null,
+    unavailable: result.unavailable.map((u) => `${u.title} (${u.status})`),
+    farAboveBudget: result.droppedOverBudget.map((p) => `${p.title} at ${p.priceDisplay}`),
+    nearestElsewhere: result.nearestElsewhere
+      ? `${result.nearestElsewhere.title}, about ${result.nearestElsewhere.distanceKm} km away, ${result.nearestElsewhere.priceDisplay}`
+      : undefined
+  };
+}
+
+// The business does not want em or en dashes in messages, so they are removed here whatever the model writes.
+export function withoutDashes(text) {
+  return String(text)
+    .replace(/(\d[a-z]*)\s*[–—]\s*(\d)/gi, '$1 to $2')
+    .replace(/\s*[–—]\s*/g, ', ')
+    .replace(/,\s*,/g, ',');
+}
+
+// ---- checks on what the model says ----------------------------------------------------------
+
+const AMOUNT =
+  /(?:₹|rs\.?\s*)\s*\d[\d,]*(?:\.\d+)?\s*(?:crores?|cr|lakhs?|lacs?|l)?\b|\b\d[\d,]*(?:\.\d+)?\s*(?:crores?|cr|lakhs?|lacs?)\b/gi;
+
+function amountsIn(text) {
+  return [...String(text).matchAll(AMOUNT)]
+    .map((m) => parseAmount(m[0])?.value)
+    .filter((v) => Number.isFinite(v));
+}
+
+// Every amount in the reply must come from a tool result, the customer's own words, or their saved budget.
+export function guardAmounts(reply, sources) {
+  const allowed = sources.flatMap(amountsIn);
+  const close = (a, b) => Math.abs(a - b) <= Math.max(1, b * 0.02);
+  const invented = amountsIn(reply).filter((v) => v >= 1000 && !allowed.some((a) => close(v, a)));
+  return invented.length ? { text: '', blocked: true, invented } : { text: reply.trim(), blocked: false };
+}
+
+function leadBudgets(lead) {
+  return { min: lead.budgetMin ? `₹${lead.budgetMin}` : '', max: lead.budgetMax ? `₹${lead.budgetMax}` : '' };
+}
+
+function resolveId({ position, propertyId }, shown) {
+  if (propertyId && shown.some((s) => s.id === propertyId)) return propertyId;
+  if (position) return shown[position - 1]?.id ?? null;
+  return propertyId ?? null;
+}
+
+function withoutNulls(object) {
+  return Object.fromEntries(Object.entries(object ?? {}).filter(([, v]) => v !== null && v !== undefined));
+}
+

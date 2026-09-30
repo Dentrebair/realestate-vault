@@ -1,0 +1,516 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import request from 'supertest';
+import { createApp } from '../src/app.js';
+import { addToShortlist, getLead, setBotState, upsertLeadMemory } from '../src/leadMemory.js';
+import { guardAmounts, withoutDashes } from '../src/telegram/agent.js';
+import { createBot } from '../src/telegram/bot.js';
+import { FALLBACK, NON_TEXT, OFF_TOPIC, RATE_LIMITED, STALE_PROPERTY, TOO_LONG } from '../src/telegram/copy.js';
+import { Cr, L, properties } from './fixtures/properties.js';
+import { createFakeSupabase } from './helpers/fakeSupabase.js';
+
+const USER = 4242;
+const SALES = 999;
+const ID = `telegram:${USER}`;
+
+// ---- harness ------------------------------------------------------------------------------
+
+let counter = 1000;
+const next = () => ++counter;
+const person = (id = USER) => ({ id, is_bot: false, first_name: 'Asha', username: 'asha_k' });
+const privateChat = (id = USER) => ({ id, type: 'private', first_name: 'Asha' });
+
+const say = (text, id = USER) => ({
+  update_id: next(),
+  message: {
+    message_id: next(),
+    date: 0,
+    chat: privateChat(id),
+    from: person(id),
+    text,
+    ...(text.startsWith('/')
+      ? { entities: [{ type: 'bot_command', offset: 0, length: text.split(' ')[0].length }] }
+      : {})
+  }
+});
+
+const tap = (data, id = USER) => ({
+  update_id: next(),
+  callback_query: {
+    id: String(next()),
+    from: person(id),
+    chat_instance: 'x',
+    data,
+    message: { message_id: 77, date: 0, chat: privateChat(id), text: 'card' }
+  }
+});
+
+const BOT_INFO = {
+  id: 123, is_bot: true, first_name: 'Bot', username: 'testbot',
+  can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false
+};
+
+function harness({ generate = async () => ({ text: 'ok' }), tables = {}, config = {} } = {}) {
+  const supabase = createFakeSupabase({ properties, ...tables });
+  const calls = [];
+  const bot = createBot({
+    token: '123:test',
+    botInfo: BOT_INFO,
+    supabase,
+    config: { salesDeskChatId: SALES, businessHours: 'Mon to Sat, 10am to 7pm', agentTimeoutMs: 5000, ...config },
+    ai: { generate, model: {}, providerOptions: undefined }
+  });
+  bot.api.config.use(async (_previous, method, payload) => {
+    calls.push({ method, payload });
+    const result =
+      method === 'sendMessage'
+        ? { message_id: next(), date: 0, chat: privateChat(payload.chat_id), text: payload.text }
+        : true;
+    return { ok: true, result };
+  });
+
+  return {
+    bot,
+    supabase,
+    calls,
+    send: (update) => bot.handleUpdate(update),
+    sent: (method = 'sendMessage') => calls.filter((c) => c.method === method).map((c) => c.payload),
+    toUser: () => calls.filter((c) => c.method === 'sendMessage' && c.payload.chat_id === USER).map((c) => c.payload),
+    toSales: () => calls.filter((c) => c.method === 'sendMessage' && c.payload.chat_id === SALES).map((c) => c.payload),
+    rows: (table) => supabase.tables[table] ?? []
+  };
+}
+
+const toolCall = { toolCallId: 't', messages: [] };
+const buttons = (payload) => payload.reply_markup?.inline_keyboard?.flat().map((b) => b.callback_data) ?? [];
+
+async function seedLead(h, fields = {}, stage) {
+  await upsertLeadMemory(h.supabase, { customerId: ID, displayName: 'Asha', ...fields }, { actor: 'system' });
+  if (stage) h.supabase.tables.customer_leads.find((r) => r.customer_id === ID).lead_stage = stage;
+}
+
+// ---- /start and the welcome -----------------------------------------------------------------
+
+test('/start creates the lead at initiated, records the campaign, and offers category buttons', async () => {
+  const h = harness();
+  await h.send(say('/start omr_ad1'));
+
+  const lead = await getLead(h.supabase, ID);
+  assert.equal(lead.leadStage, 'initiated');
+  assert.equal(lead.source, 'omr_ad1');
+  assert.equal(lead.displayName, 'Asha');
+  assert.equal(lead.handle, 'asha_k');
+
+  const [welcome] = h.toUser();
+  assert.match(welcome.text, /Hi Asha!/);
+  assert.match(welcome.text, /indicative and subject to verification/);
+  assert.deepEqual(buttons(welcome), [
+    'action:browse:residential', 'action:browse:commercial', 'action:browse:land',
+    'action:browse:hospitality', 'action:browse:industrial'
+  ]);
+});
+
+test('groups, duplicates and non-text messages', async () => {
+  let asked = 0;
+  const h = harness({ generate: async () => (asked++, { text: 'ok' }) });
+
+  const group = say('show me flats');
+  group.message.chat = { id: -5, type: 'group', title: 'g' };
+  await h.send(group);
+  assert.equal(h.calls.length, 0, 'group chats are ignored');
+
+  const update = say('show me flats');
+  await h.send(update);
+  await h.send(update);
+  assert.equal(asked, 1, 'a repeated update_id is processed once');
+
+  const photo = { update_id: next(), message: { message_id: next(), date: 0, chat: privateChat(), from: person(), photo: [{ file_id: 'a', file_unique_id: 'b', width: 1, height: 1 }] } };
+  await h.send(photo);
+  assert.equal(h.toUser().at(-1).text, NON_TEXT);
+});
+
+// ---- a conversational turn ------------------------------------------------------------------
+
+test('a search turn sends cards first, then the reply; saves requirements; moves the lead to interested', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.save_requirements.execute(
+        { maxBudget: { amount: 1.5, unit: 'crore' }, preferredLocations: ['OMR'], bedrooms: 3 },
+        toolCall
+      );
+      await tools.search_properties.execute(
+        { location: 'OMR', category: 'residential', bedrooms: 3, maxBudget: { amount: 1.5, unit: 'crore' } },
+        toolCall
+      );
+      return { text: 'There is no exact match, but this is the closest option.', usage: { totalTokens: 10 } };
+    }
+  });
+
+  await h.send(say('3BHK in OMR under 1.5 crore'));
+
+  const messages = h.toUser();
+  assert.equal(messages.length, 2);
+  const [card, reply] = messages;
+  assert.match(card.text, /Close option/);
+  assert.match(card.text, /Navalur/);
+  assert.match(card.text, /1 bedroom fewer \(2 instead of 3\)/);
+  assert.match(card.text, /₹62 L/);
+  assert.equal(card.parse_mode, 'HTML');
+  assert.deepEqual(buttons(card), ['action:visit:p04', 'action:save:p04']);
+  assert.equal(reply.text, 'There is no exact match, but this is the closest option.');
+
+  assert.ok(h.sent('sendChatAction').some((a) => a.action === 'typing'));
+
+  const lead = await getLead(h.supabase, ID);
+  assert.equal(lead.leadStage, 'interested');
+  assert.equal(lead.budgetMax, Cr(1.5));
+  assert.deepEqual(lead.preferredLocations, ['OMR']);
+  assert.deepEqual(lead.botState.shown.map((s) => s.id), ['p04']);
+
+  assert.deepEqual(h.rows('chat_messages').map((m) => m.role), ['user', 'assistant']);
+  assert.ok(h.rows('lead_events').some((e) => e.event_type === 'zero_result'));
+});
+
+test('the model never chooses whose lead it is', async () => {
+  const other = 'telegram:777';
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.save_requirements.execute({ customerId: other, urgency: 'tomorrow' }, toolCall);
+      return { text: 'Noted.' };
+    }
+  });
+  await upsertLeadMemory(h.supabase, { customerId: other, displayName: 'Other' }, { actor: 'system' });
+  await h.send(say('hello'));
+
+  assert.equal((await getLead(h.supabase, other)).urgency, undefined);
+  assert.equal((await getLead(h.supabase, ID)).urgency, 'tomorrow');
+});
+
+test('a saved budget carries into the next search without being asked again', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ category: 'residential' }, toolCall);
+      return { text: 'Here are homes within your budget.' };
+    }
+  });
+  await seedLead(h, { budgetMax: L(70), propertyCategories: ['residential'] });
+  await h.send(say('show me homes'));
+
+  const cards = h.toUser().slice(0, -1).map((m) => m.text).join('\n');
+  assert.match(cards, /Navalur/);
+  assert.doesNotMatch(cards, /Sky Mansion/, 'the ₹4.8 Cr flat is over the saved budget');
+  assert.doesNotMatch(cards, /Penthouse/, 'sold listings are never shown');
+});
+
+test('a null-price listing never gets a number', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ category: 'residential', query: 'bungalow' }, toolCall);
+      return { text: 'This one is price on request.' };
+    }
+  });
+  await h.send(say('heritage bungalow in Alwarpet'));
+  assert.match(h.toUser()[0].text, /Price on Request \(POR\)/);
+});
+
+test('an amount the model invents is replaced', async () => {
+  assert.equal(guardAmounts('It costs ₹99 Cr.', ['₹4.8 Cr']).blocked, true);
+  assert.equal(guardAmounts('It costs ₹4.8 Cr.', ['{"price":"₹4.8 Cr"}']).blocked, false);
+  assert.equal(guardAmounts('Your budget of 1.5 crore is noted.', ['under 1.5 crore']).blocked, false);
+  assert.equal(guardAmounts('Around 3 BHK homes.', []).blocked, false);
+
+  const h = harness({ generate: async () => ({ text: 'That one is about ₹2 Cr.' }) });
+  await h.send(say('what does the Alwarpet bungalow cost?'));
+  assert.doesNotMatch(h.toUser().at(-1).text, /₹2 Cr/);
+});
+
+test('the model can ask about a property already shown, by position', async () => {
+  let details;
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ category: 'residential', bedrooms: 4 }, toolCall);
+      details = await tools.get_property.execute({ position: 1 }, toolCall);
+      return { text: 'Here you go.' };
+    }
+  });
+  await h.send(say('4 bhk homes'));
+  assert.equal(details.id, 'p03');
+  assert.equal(details.price, '₹4.8 Cr');
+});
+
+test('request_site_visit sends a confirm button and does not change the stage', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ location: 'Tambaram', category: 'residential' }, toolCall);
+      await tools.request_site_visit.execute({ position: 1 }, toolCall);
+      return { text: 'Tap the button to confirm.' };
+    }
+  });
+  await h.send(say('I want to see the flat in Tambaram'));
+
+  const prompt = h.toUser().find((m) => /Would you like to visit/.test(m.text));
+  assert.deepEqual(buttons(prompt), ['action:visit:p16']);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'interested');
+});
+
+test('the model can reach negotiating but not site_visit_ready', async () => {
+  let blocked;
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.save_requirements.execute({ leadStage: 'negotiating', stageReason: 'asked for 10% off' }, toolCall);
+      blocked = await tools.save_requirements.execute({ leadStage: 'site_visit_ready' }, toolCall).catch((e) => e);
+      return { text: 'Our sales team handles pricing.' };
+    }
+  });
+  await seedLead(h, { budgetMax: Cr(5) });
+  await h.send(say('can you give me a 10% discount?'));
+
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
+  assert.ok(!(blocked instanceof Error));
+});
+
+test('if the model fails, the customer gets the fallback and the Sales desk is told', async () => {
+  const h = harness({ generate: async () => { throw new Error('model timed out'); } });
+  await h.send(say('show me flats'));
+
+  assert.equal(h.toUser().at(-1).text, FALLBACK);
+  assert.match(h.toSales()[0].text, /could not answer a customer/);
+  assert.match(h.toSales()[0].text, /model timed out/);
+});
+
+// ---- guards ---------------------------------------------------------------------------------
+
+test('off-topic first message: one polite line, then silence until they ask about property', async () => {
+  let classified = 0;
+  const h = harness({
+    generate: async ({ instructions, prompt }) => {
+      if (prompt) {
+        classified++;
+        return { text: 'NO' };
+      }
+      return { text: 'Sure, here are flats.' };
+    }
+  });
+
+  await h.send(say('what is the weather today'));
+  assert.equal(h.toUser().at(-1).text, OFF_TOPIC);
+  const after = h.toUser().length;
+
+  await h.send(say('tell me a joke'));
+  assert.equal(h.toUser().length, after, 'no second reply');
+  assert.equal(classified, 2);
+
+  await h.send(say('show me flats in Anna Nagar'));
+  assert.equal(h.toUser().at(-1).text, 'Sure, here are flats.');
+});
+
+test('greetings and property words are on topic without asking the model', async () => {
+  let classified = 0;
+  const h = harness({ generate: async ({ prompt }) => (prompt ? (classified++, { text: 'NO' }) : { text: 'Hello!' }) });
+  await h.send(say('hi'));
+  await h.send(say('looking for a 2bhk'));
+  assert.equal(classified, 0);
+  assert.equal(h.toUser().at(-1).text, 'Hello!');
+});
+
+test('if the scope check fails, the message is treated as on topic', async () => {
+  const h = harness({
+    generate: async ({ prompt }) => {
+      if (prompt) throw new Error('classifier down');
+      return { text: 'Happy to help.' };
+    }
+  });
+  await h.send(say('umm what do you have'));
+  assert.equal(h.toUser().at(-1).text, 'Happy to help.');
+});
+
+test('the 21st message in an hour is refused; long messages are refused', async () => {
+  const h = harness({ generate: async () => ({ text: 'ok' }) });
+  for (let i = 0; i < 20; i++) await h.send(say('hi'));
+  await h.send(say('hi'));
+  assert.equal(h.toUser().at(-1).text, RATE_LIMITED);
+
+  const other = harness();
+  await other.send(say('flat '.repeat(300)));
+  assert.equal(other.toUser().at(-1).text, TOO_LONG);
+});
+
+// ---- buttons --------------------------------------------------------------------------------
+
+test('Book Site Visit: sets site_visit_ready, records the property, alerts the Sales desk once', async () => {
+  const h = harness();
+  await seedLead(h, { budgetMax: L(70), preferredLocations: ['OMR'], urgency: 'this month' });
+
+  await h.send(tap('action:visit:p04'));
+
+  const lead = await getLead(h.supabase, ID);
+  assert.equal(lead.leadStage, 'site_visit_ready');
+  const requested = h.rows('lead_events').find((e) => e.event_type === 'site_visit_requested');
+  assert.equal(requested.property_id, 'p04');
+  assert.ok(requested.alerted_at, 'the alert is marked as sent');
+
+  assert.match(h.toUser()[0].text, /Site visit request noted for High-Rise 2BHK Apartment/);
+  assert.match(h.toUser()[0].text, /Mon to Sat, 10am to 7pm/);
+  assert.ok(h.toUser().some((m) => /share your number/.test(m.text)), 'offers the share-number button');
+
+  const [alert] = h.toSales();
+  assert.match(alert.text, /Site visit requested/);
+  assert.match(alert.text, /Asha/);
+  assert.match(alert.text, /High-Rise 2BHK Apartment/);
+  assert.match(alert.text, /₹62 L/);
+  assert.match(alert.text, /OMR/);
+
+  assert.equal(h.sent('answerCallbackQuery').length, 1);
+
+  await h.send(tap('action:visit:p04'));
+  assert.equal(h.toSales().length, 1, 'a second tap sends no second alert');
+  assert.match(h.toUser().at(-1).text, /already asked to visit/);
+});
+
+test('an old card for a sold property cannot be booked', async () => {
+  const h = harness();
+  await seedLead(h, {});
+  await h.send(tap('action:visit:p19'));
+
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'initiated');
+  assert.equal(h.toSales().length, 0);
+  const answer = h.sent('answerCallbackQuery')[0];
+  assert.equal(answer.text, STALE_PROPERTY);
+  assert.equal(answer.show_alert, true);
+});
+
+test('Shortlist and remove: the button swaps, the lead moves to interested', async () => {
+  const h = harness();
+  await seedLead(h, {});
+
+  await h.send(tap('action:save:p09'));
+  assert.deepEqual((await getLead(h.supabase, ID)).shortlistedPropertyIds, ['p09']);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'interested');
+  const saved = h.sent('editMessageReplyMarkup')[0];
+  assert.deepEqual(saved.reply_markup.inline_keyboard.flat().map((b) => b.callback_data), ['action:visit:p09', 'action:unsave:p09']);
+
+  await h.send(tap('action:unsave:p09'));
+  assert.deepEqual((await getLead(h.supabase, ID)).shortlistedPropertyIds, []);
+  const removed = h.sent('editMessageReplyMarkup')[1];
+  assert.deepEqual(removed.reply_markup.inline_keyboard.flat().map((b) => b.callback_data), ['action:visit:p09', 'action:save:p09']);
+});
+
+test('quick-pick buttons list a category without the model', async () => {
+  let asked = 0;
+  const h = harness({ generate: async () => (asked++, { text: 'x' }) });
+  await seedLead(h, {});
+  await h.send(tap('action:browse:residential'));
+
+  assert.equal(asked, 0);
+  const texts = h.toUser().map((m) => m.text);
+  assert.equal(texts.filter((t) => /Matches your requirements/.test(t)).length, 5);
+  assert.match(texts.at(-1), /Tell me your budget/);
+  assert.ok(texts.some((t) => /Showing 5 of/.test(t)));
+
+  const lead = await getLead(h.supabase, ID);
+  assert.equal(lead.botState.scope, 'on_topic');
+  assert.equal(lead.leadStage, 'interested');
+});
+
+test('Show more continues from where the last search stopped', async () => {
+  const h = harness();
+  await seedLead(h, {});
+  await h.send(tap('action:browse:residential'));
+  const firstPage = h.toUser().filter((m) => /Matches your requirements/.test(m.text)).map((m) => m.text);
+
+  await h.send(tap('action:more'));
+  const all = h.toUser().filter((m) => /Matches your requirements/.test(m.text)).map((m) => m.text);
+  assert.ok(all.length > firstPage.length);
+  assert.equal(new Set(all.map((t) => t.split('\n')[1])).size, all.length, 'no property repeated');
+});
+
+// ---- commands -------------------------------------------------------------------------------
+
+test('/saved lists the shortlist and says when a saved property has sold', async () => {
+  const h = harness();
+  await seedLead(h, {});
+  await addToShortlist(h.supabase, ID, 'p03');
+  await addToShortlist(h.supabase, ID, 'p19');
+  await h.send(say('/saved'));
+
+  const messages = h.toUser();
+  assert.match(messages[0].text, /Your shortlist/);
+  assert.match(messages[0].text, /Sky Mansion/);
+  assert.match(messages[1].text, /Penthouse.*no longer available/);
+});
+
+test('/reset clears the conversation but keeps the profile and the shortlist', async () => {
+  const h = harness({ generate: async () => ({ text: 'ok' }) });
+  await seedLead(h, { budgetMax: Cr(2) });
+  await addToShortlist(h.supabase, ID, 'p09');
+  await h.send(say('hello'));
+  assert.ok(h.rows('chat_messages').length > 0);
+
+  await h.send(say('/reset'));
+  assert.equal(h.rows('chat_messages').length, 0);
+  const lead = await getLead(h.supabase, ID);
+  assert.equal(lead.budgetMax, Cr(2));
+  assert.deepEqual(lead.shortlistedPropertyIds, ['p09']);
+});
+
+test('a shared contact saves the number; someone else\'s contact is refused', async () => {
+  const h = harness();
+  await seedLead(h, {});
+
+  const contact = (user_id) => ({
+    update_id: next(),
+    message: { message_id: next(), date: 0, chat: privateChat(), from: person(), contact: { phone_number: '919876543210', first_name: 'Asha', user_id } }
+  });
+
+  await h.send(contact(999999));
+  assert.equal((await getLead(h.supabase, ID)).phone, undefined);
+
+  await h.send(contact(USER));
+  assert.equal((await getLead(h.supabase, ID)).phone, '+919876543210');
+  assert.match(h.toSales().at(-1).text, /shared their number/);
+});
+
+// ---- webhook and routes ---------------------------------------------------------------------
+
+test('the webhook rejects a wrong or missing secret and answers 200 before processing', async () => {
+  const seen = [];
+  const bot = { handleUpdate: async (update) => { seen.push(update); } };
+  const secret = 's'.repeat(32);
+  const app = createApp({ supabase: null, telegramBot: bot, telegramSecret: secret });
+
+  await request(app).post('/telegram/webhook').send({ update_id: 1 }).expect(401);
+  await request(app).post('/telegram/webhook').set('X-Telegram-Bot-Api-Secret-Token', 'wrong').send({ update_id: 1 }).expect(401);
+  assert.equal(seen.length, 0);
+
+  await request(app).post('/telegram/webhook').set('X-Telegram-Bot-Api-Secret-Token', secret).send({ update_id: 7 }).expect(200);
+  assert.deepEqual(seen, [{ update_id: 7 }]);
+});
+
+test('with the tool routes off, the HTTP tools do not exist', async () => {
+  const app = createApp({ supabase: null, enableToolRoutes: false });
+  await request(app).post('/tools/search-properties').send({}).expect(404);
+  await request(app).post('/tools/upsert-lead-memory').send({}).expect(404);
+  await request(app).get('/health').expect(200);
+});
+
+test('setBotState merges instead of replacing', async () => {
+  const h = harness();
+  await seedLead(h, {});
+  await setBotState(h.supabase, ID, { scope: 'on_topic' });
+  await setBotState(h.supabase, ID, { shown: [{ id: 'p01' }] });
+  const state = (await getLead(h.supabase, ID)).botState;
+  assert.equal(state.scope, 'on_topic');
+  assert.equal(state.shown.length, 1);
+});
+
+test('replies never contain em or en dashes', async () => {
+  assert.equal(withoutDashes('discounts—pricing is handled by our team'), 'discounts, pricing is handled by our team');
+  assert.equal(withoutDashes('We can help — happily.'), 'We can help, happily.');
+  assert.equal(withoutDashes('Open 10am–7pm'), 'Open 10am to 7pm');
+  assert.equal(withoutDashes('Budget 50–60 lakh'), 'Budget 50 to 60 lakh');
+  assert.equal(withoutDashes('Well–known area'), 'Well, known area');
+
+  const h = harness({ generate: async () => ({ text: 'Pricing is handled by sales—happy to arrange a visit.' }) });
+  await h.send(say('can you reduce the price?'));
+  assert.equal(h.toUser().at(-1).text, 'Pricing is handled by sales, happy to arrange a visit.');
+});

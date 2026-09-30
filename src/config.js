@@ -1,6 +1,8 @@
 import 'dotenv/config';
 import { z } from 'zod';
 
+const blank = (value) => (value === '' ? undefined : value);
+
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(3000),
   nodeEnv: z.string().default('development'),
@@ -9,30 +11,60 @@ const configSchema = z.object({
   connectorBearerToken: z.string().min(1).optional(),
   supabaseSchema: z.string().min(1).default('public'),
   propertiesTable: z.string().min(1).default('properties'),
-  searchColumns: z
-    .string()
-    .min(1)
-    .default('title,location,category,status,raw_listing_text')
-    .transform((value) =>
-      value
-        .split(',')
-        .map((column) => column.trim())
-        .filter(Boolean)
-    ),
-  orderColumn: z.string().min(1).optional()
+
+  // Telegram
+  telegramBotToken: z.string().min(1).optional(),
+  telegramWebhookSecret: z.string().min(16).optional(),
+  telegramMode: z.enum(['polling', 'webhook']).optional(),
+  publicBaseUrl: z.string().url().optional(),
+  salesDeskChatId: z.coerce.number().int().optional(),
+  businessHours: z.string().min(1).default('Mon to Sat, 10am to 7pm IST'),
+
+  // AI
+  openaiApiKey: z.string().min(1).optional(),
+  openaiModel: z.string().min(1).default('gpt-5-mini'),
+  openaiReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high']).default('minimal'),
+  agentTimeoutMs: z.coerce.number().int().positive().default(25000),
+
+  // The WhatsApp-style tool routes are open to whoever holds the bearer token.
+  enableToolRoutes: z.boolean()
 });
 
+const nodeEnv = blank(process.env.NODE_ENV) ?? 'development';
+const publicDomain = blank(process.env.RAILWAY_PUBLIC_DOMAIN);
+
 export const config = configSchema.parse({
-  port: process.env.PORT,
-  nodeEnv: process.env.NODE_ENV,
-  supabaseUrl: process.env.SUPABASE_URL,
-  supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
-  connectorBearerToken: process.env.CONNECTOR_BEARER_TOKEN || undefined,
-  supabaseSchema: process.env.SUPABASE_SCHEMA,
-  propertiesTable: process.env.PROPERTIES_TABLE,
-  searchColumns: process.env.SEARCH_COLUMNS || process.env.LOCATION_COLUMNS,
-  orderColumn: process.env.ORDER_COLUMN || undefined
+  port: blank(process.env.PORT),
+  nodeEnv,
+  supabaseUrl: blank(process.env.SUPABASE_URL),
+  supabaseServiceRoleKey: blank(process.env.SUPABASE_SERVICE_ROLE_KEY),
+  connectorBearerToken: blank(process.env.CONNECTOR_BEARER_TOKEN),
+  supabaseSchema: blank(process.env.SUPABASE_SCHEMA),
+  propertiesTable: blank(process.env.PROPERTIES_TABLE),
+
+  telegramBotToken: blank(process.env.TELEGRAM_BOT_TOKEN),
+  telegramWebhookSecret: blank(process.env.TELEGRAM_WEBHOOK_SECRET),
+  telegramMode: blank(process.env.TELEGRAM_MODE),
+  publicBaseUrl: blank(process.env.PUBLIC_BASE_URL) ?? (publicDomain ? `https://${publicDomain}` : undefined),
+  salesDeskChatId: blank(process.env.SALES_DESK_CHAT_ID),
+  businessHours: blank(process.env.BUSINESS_HOURS),
+
+  openaiApiKey: blank(process.env.OPENAI_API_KEY),
+  openaiModel: blank(process.env.OPENAI_MODEL),
+  openaiReasoningEffort: blank(process.env.OPENAI_REASONING_EFFORT),
+  agentTimeoutMs: blank(process.env.AGENT_TIMEOUT_MS),
+
+  enableToolRoutes:
+    blank(process.env.ENABLE_TOOL_ROUTES) !== undefined
+      ? process.env.ENABLE_TOOL_ROUTES === 'true'
+      : nodeEnv !== 'production'
 });
 
 export const isSupabaseConfigured =
   Boolean(config.supabaseUrl) && Boolean(config.supabaseServiceRoleKey);
+
+export const isTelegramConfigured =
+  Boolean(config.telegramBotToken) && Boolean(config.telegramWebhookSecret);
+
+// Polling needs no public address, so it is the default anywhere except production.
+export const telegramMode = config.telegramMode ?? (config.nodeEnv === 'production' ? 'webhook' : 'polling');

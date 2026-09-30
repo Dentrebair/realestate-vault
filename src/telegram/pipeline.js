@@ -1,8 +1,9 @@
 // A text message from a Lead: guards, memory, the model, and the reply.
-import { setBotState } from '../leadMemory.js';
+import { setBotState, setStage } from '../leadMemory.js';
 import { runAgentTurn } from './agent.js';
 import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, RATE_LIMITED, TOO_LONG } from './copy.js';
 import { loadHistory, saveMessage } from './history.js';
+import { isNegotiation } from './intent.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { failureAlert, notifySales } from './sales.js';
 import { scopeOf } from './scope.js';
@@ -36,6 +37,14 @@ export async function handleText(ctx, deps) {
     }
     await setBotState(supabase, customerId, { scope: 'on_topic' });
     lead.botState = { ...lead.botState, scope: 'on_topic' };
+  }
+
+  // Asking for a discount is negotiation whether or not the model notices. Code does not rely on it.
+  if (isNegotiation(text)) {
+    await setStage(supabase, customerId, 'negotiating', {
+      actor: 'system',
+      reason: 'asked about price or a discount'
+    }).catch((error) => log('stage_failed', { customerId, error: error.message }, 'error'));
   }
 
   const stopTyping = keepTyping(api, chatId);

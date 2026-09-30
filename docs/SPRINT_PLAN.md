@@ -123,7 +123,7 @@ Status: built and verified on 2026-10-01 on a laptop. Railway deploy moved to af
 - [x] Money is read by code (`150L`, `1.5C`, ranges, missing units) and handed to the model as a fact.
 - [x] Production safety: tool routes off by default in production; refuses to start in production without the bearer token; no open CORS; upstream error text hidden.
 - [x] Eval harness (`npm run eval`, see below).
-- [ ] Deploy to Railway and register the webhook. Moved to after Sprint P3.
+- [ ] Deploy to Railway and register the webhook. Moved to the very end, after Phase 2 work.
 - [ ] Known gap: the model timeout is 25 seconds, not the PRD's 10, because a tool turn cannot reliably finish in 10.
 
 **Done when (live):** scenes 1 to 3 and 6 of the demo work on the real bot. Met on a laptop; the live Telegram test of scenes 1 to 6 passed on 2026-10-01.
@@ -145,7 +145,7 @@ Status: built 2026-10-01. One step is waiting on you (creating the first staff a
 - [x] README, demo script ([docs/DEMO.md](DEMO.md)), updated `.env.example`.
 - [x] Full eval run across all 50 leads: done in Sprint P2 (149 of 150 lead-runs passed).
 - [ ] **You:** run `sql/002_admin.sql`, create your account in Supabase Auth, run `npm run add-staff -- you@email.com admin`, then sign in and rehearse [docs/DEMO.md](DEMO.md). Until then the sign-in has only been tested against a stand-in for Supabase Auth, not the real one.
-- [ ] Rehearsal of scenes 4 to 7 on the live bot (scenes 1 to 3 and the discount and visit steps were tried live earlier).
+- [ ] Rehearsal of scenes 4 to 7 on the bot running on your laptop (scenes 1 to 3 and the discount and visit steps were tried live earlier). The rehearsal on a deployed bot moves to the very end with the Railway deploy.
 
 **Done when:** scenes 1 to 7 work end to end and the board shows stage changes from the chat within a few seconds.
 

@@ -133,7 +133,7 @@ evals/          model evals             scripts/        seeding and helpers
 
 ## Deploying to Railway (not done yet)
 
-Planned for after the board is signed off: create a Railway project from this repository's `telegram` branch, set the
+Deliberately left for last, after the Phase 2 work: create a Railway project from this repository's `telegram` branch, set the
 variables from `.env.example` (leave `TELEGRAM_MODE` empty, `NODE_ENV=production`), and Railway's domain becomes the
 webhook address. One instance is assumed; the duplicate-message and rate-limit guards live in memory.
 

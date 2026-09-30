@@ -37,6 +37,11 @@ export function checksFor(n, r) {
   need(!/I am having trouble accessing live property records/.test(replies), 'fell back to the failure message');
   need(!/\b(visit|viewing)\b[^.]{0,40}\b(booked|scheduled|confirmed)\b|\b(booked|scheduled|confirmed)\b[^.]{0,30}\b(visit|viewing)\b/i.test(replies), 'said a visit was booked, scheduled or confirmed');
 
+  need(!/lead stage|updating (the |your )?(lead|record)|stage to (negotiating|interested)/i.test(replies), 'talked about its own bookkeeping');
+  if (/\b(tap|press|click)\b[^.]*\bconfirm\b/i.test(replies)) {
+    need(r.out.some((m) => m.buttons.some((b) => b.startsWith('action:visit'))), 'mentioned a Confirm button that was never sent');
+  }
+
   const start = r.lead.stage;
   const end = r.row.lead_stage;
   if (end !== 'not_interested' && start !== 'not_interested') {

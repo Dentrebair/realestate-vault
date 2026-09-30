@@ -3,7 +3,8 @@ import test from 'node:test';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { addToShortlist, getLead, setBotState, upsertLeadMemory } from '../src/leadMemory.js';
-import { guardAmounts, mentionUnavailable, moneyHint, withoutDashes } from '../src/telegram/agent.js';
+import { claimsVisitButton, guardAmounts, mentionUnavailable, moneyHint, withoutBackstage, withoutDashes, withoutPhantomButtons } from '../src/telegram/agent.js';
+import { isNegotiation } from '../src/telegram/intent.js';
 import { createBot } from '../src/telegram/bot.js';
 import { FALLBACK, NON_TEXT, OFF_TOPIC, RATE_LIMITED, STALE_PROPERTY, TOO_LONG } from '../src/telegram/copy.js';
 import { Cr, L, properties } from './fixtures/properties.js';
@@ -573,4 +574,70 @@ test('a sold or reserved match is always named, even if the model forgets', () =
   assert.equal(mentionUnavailable('The penthouse is sold, sorry.', unavailable), 'The penthouse is sold, sorry.');
   assert.equal(mentionUnavailable('Hello', []), 'Hello');
   assert.match(mentionUnavailable('Hi', [{ title: 'Showroom', status: 'reserved' }]), /Showroom is reserved/);
+});
+
+test('asking for a discount moves the lead to negotiating even if the model does nothing', async () => {
+  const h = harness({ generate: async () => ({ text: 'Our sales team handles pricing.' }) });
+  await seedLead(h, { budgetMax: Cr(5) }, 'interested');
+  await h.send(say('Can you give me a 10% discount?'));
+
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
+  const moved = h.rows('lead_events').find((e) => e.event_type === 'stage_changed' && e.to_stage === 'negotiating');
+  assert.equal(moved.note, 'asked about price or a discount');
+  assert.equal(moved.payload.actor, 'system');
+});
+
+test('price talk is recognised, ordinary searches are not', () => {
+  for (const yes of ['Can you give me a 10% discount?', 'is the price negotiable', 'can the plot come down to 50 lakh?', 'reduce the price a bit', 'what is your best price', 'Another broker is cheaper, can you match?', '15% off?']) {
+    assert.equal(isNegotiation(yes), true, yes);
+  }
+  for (const no of ['show me something cheaper', '3BHK in OMR under 1.5 crore', 'ROI is 8% they say', 'what is the price of the bungalow', 'I need a house']) {
+    assert.equal(isNegotiation(no), false, no);
+  }
+});
+
+test('notes about the assistant\'s own bookkeeping are removed from replies', () => {
+  assert.equal(
+    withoutBackstage('Pricing is handled by our sales team.\n\n(Updating lead stage to negotiating so the team knows you want to discuss price.)'),
+    'Pricing is handled by our sales team.'
+  );
+  assert.equal(withoutBackstage('I have updated the lead stage. Here are options.'), 'Here are options.');
+  assert.equal(withoutBackstage('Here are three flats (all in OMR).'), 'Here are three flats (all in OMR).');
+});
+
+test('a button that was never sent is not mentioned', () => {
+  assert.equal(claimsVisitButton('Tap the "Confirm site visit" button to request it.'), true);
+  assert.equal(claimsVisitButton('Which property would you like to see?'), false);
+  assert.equal(withoutPhantomButtons('I can arrange that. Tap the "Confirm site visit" button to request it.', false), 'I can arrange that.');
+  assert.equal(withoutPhantomButtons('Tap the "Confirm site visit" button.', false), 'Which property would you like to visit?');
+  assert.equal(withoutPhantomButtons('Tap the "Confirm site visit" button.', true), 'Tap the "Confirm site visit" button.');
+});
+
+test('a promised confirm button is sent by re-running the turn with that tool forced', async () => {
+  const calls = [];
+  const h = harness({
+    generate: async (options) => {
+      calls.push(options);
+      if (calls.length === 1) {
+        await options.tools.search_properties.execute({ location: 'Tambaram', category: 'residential' }, toolCall);
+        return { text: 'Tap the "Confirm site visit" button to request the visit.' };
+      }
+      await options.tools.request_site_visit.execute({ position: 1 }, toolCall);
+      return { text: 'Tap the "Confirm site visit" button to request it.' };
+    }
+  });
+  await seedLead(h, {}, 'interested');
+  await h.send(say('confirm site visit'));
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].prepareStep({ stepNumber: 0 }), { toolChoice: { type: 'tool', toolName: 'request_site_visit' } });
+  assert.ok(h.toUser().some((m) => /Would you like to visit/.test(m.text) && buttons(m).includes('action:visit:p16')), 'the confirm button was sent');
+  assert.match(h.toUser().at(-1).text, /Confirm site visit/);
+});
+
+test('if no button can be sent, the promise to send one is removed', async () => {
+  const h = harness({ generate: async () => ({ text: 'Happy to arrange it. Tap the "Confirm site visit" button to request it.' }) });
+  await seedLead(h, {}, 'interested');
+  await h.send(say('I want to visit'));
+  assert.equal(h.toUser().at(-1).text, 'Happy to arrange it.');
 });

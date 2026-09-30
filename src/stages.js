@@ -30,7 +30,7 @@ const ORDER = {
 const MODEL_TARGETS = ['interested', 'negotiating', 'not_interested'];
 
 const ALLOWED_TARGETS = {
-  system: ['interested'],
+  system: ['interested', 'negotiating'],
   model: MODEL_TARGETS,
   api: MODEL_TARGETS,
   button: ['interested', 'site_visit_ready', 'not_interested'],

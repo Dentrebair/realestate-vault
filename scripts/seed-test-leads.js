@@ -144,7 +144,10 @@ async function adopt(personaId, telegramId, properties) {
   // Start the conversation clean: no old messages, history or bot memory from before.
   await check(supabase.from('chat_messages').delete().eq('customer_id', row.customer_id), 'clear messages');
   await check(supabase.from('lead_events').delete().eq('customer_id', row.customer_id), 'clear events');
-  await check(supabase.from('customer_leads').upsert({ ...row, bot_state: {}, phone: null }, { onConflict: 'customer_id' }), 'adopt');
+  // Keep the real person's name and handle; only the requirements and stage come from the persona.
+  const { data: existing } = await supabase.from('customer_leads').select('display_name,handle').eq('customer_id', row.customer_id).maybeSingle();
+  const keep = existing ? { display_name: existing.display_name ?? row.display_name, handle: existing.handle } : {};
+  await check(supabase.from('customer_leads').upsert({ ...row, ...keep, bot_state: {}, phone: null }, { onConflict: 'customer_id' }), 'adopt');
   console.log(`telegram:${telegramId} now has the profile of ${persona.name} (${persona.id}), stage ${persona.stage}.`);
   console.log(`Message to type: ${JSON.stringify(persona.messages)}`);
   console.log(`Expected: ${persona.expect}`);

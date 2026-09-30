@@ -27,7 +27,7 @@ export function createDeps(overrides = {}) {
 
 export async function runAgentTurn({ deps, supabase, api, chatId, lead, history, text }) {
   const customerId = lead.customerId;
-  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [] };
+  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [], visitPromptSent: false };
 
   const record = (output) => {
     state.toolOutputs.push(JSON.stringify(output));
@@ -129,6 +129,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
         }
         const prompt = visitPrompt(found.view);
         await api.sendMessage(chatId, prompt.text, { parse_mode: 'HTML', reply_markup: prompt.keyboard });
+        state.visitPromptSent = true;
         return record({
           confirmButtonSent: true,
           title: found.view.title,
@@ -161,6 +162,14 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     result = await run({ prepareStep: ({ stepNumber }) => (stepNumber === 0 ? { toolChoice: 'required' } : {}) });
   }
 
+  // The model sometimes says "tap the Confirm button" without having sent one. Make it send one.
+  if (!state.visitPromptSent && claimsVisitButton(result.text) && state.shown.length) {
+    result = await run({
+      prepareStep: ({ stepNumber }) =>
+        stepNumber === 0 ? { toolChoice: { type: 'tool', toolName: 'request_site_visit' } } : {}
+    });
+  }
+
   const guarded = guardAmounts(result.text ?? '', [text, JSON.stringify(leadBudgets(lead)), ...state.toolOutputs], text);
   const reply = guarded.blocked
     ? state.shown.length
@@ -169,11 +178,36 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     : guarded.text || (state.shown.length ? 'Here is what I found.' : 'Could you tell me a little more about what you are looking for?');
 
   return {
-    text: withoutDashes(mentionUnavailable(reply, state.unavailable)).slice(0, MAX_REPLY_CHARS),
+    text: withoutDashes(
+      mentionUnavailable(withoutPhantomButtons(withoutBackstage(reply), state.visitPromptSent), state.unavailable)
+    ).slice(0, MAX_REPLY_CHARS),
     blocked: guarded.blocked,
     shown: state.shown,
     usage: result.usage
   };
+}
+
+// Notes about the assistant's own bookkeeping are not for the customer: "(Updating lead stage to negotiating...)".
+const BACKSTAGE =
+  /\b(lead stage|stage to (?:negotiating|interested|initiated|site)|updat(?:e|ed|ing) (?:the |your |their )?(?:lead|record|profile|stage)|so the (?:sales )?team knows|saved? (?:your |these )?(?:preferences|requirements) (?:to|in))\b/i;
+
+export function withoutBackstage(reply) {
+  const text = String(reply).replace(/\s*\([^()]*\)/g, (match) => (BACKSTAGE.test(match) ? '' : match));
+  const kept = text.split(/(?<=[.!?])\s+/).filter((sentence) => !BACKSTAGE.test(sentence));
+  return kept.join(' ').trim();
+}
+
+// Mentions of a button that was never sent.
+const BUTTON_CLAIM = /\b(tap|click|press|hit)\b[^.!?]*\b(button|confirm)\b|\bconfirm site visit\b[^.!?]*\bbutton\b/i;
+
+export function claimsVisitButton(reply) {
+  return BUTTON_CLAIM.test(String(reply ?? ''));
+}
+
+export function withoutPhantomButtons(reply, buttonSent) {
+  if (buttonSent || !BUTTON_CLAIM.test(reply)) return reply;
+  const kept = reply.split(/(?<=[.!?])\s+/).filter((sentence) => !BUTTON_CLAIM.test(sentence));
+  return kept.join(' ').trim() || 'Which property would you like to visit?';
 }
 
 // A sold or reserved property that matched the request must be named as such. The model is told to,

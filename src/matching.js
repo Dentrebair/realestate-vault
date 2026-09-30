@@ -26,6 +26,27 @@ const STOPWORDS = new Set([
   'above', 'below', 'around', 'about', 'property', 'properties', 'chennai', 'good', 'nice'
 ]);
 
+// "near the city", "anywhere in Chennai": nothing to filter on.
+const VAGUE_FILLER = new Set(['near', 'nearby', 'around', 'in', 'the', 'not', 'far', 'from', 'of', 'within', 'any', 'anywhere', 'somewhere', 'a', 'to', 'close', 'city', 'chennai', 'town', 'centre', 'center', 'central', 'main', 'side']);
+
+function isVagueArea(text) {
+  const words = String(text ?? '').toLowerCase().split(/[^a-z]+/).filter(Boolean);
+  return words.length > 0 && words.every((w) => VAGUE_FILLER.has(w));
+}
+
+// "3 BHK", "3bhk", "3 bedroom" and "3+ bhk" typed into the free-text field still count as a requirement.
+export function bedroomsFromText(text) {
+  const m = String(text ?? '').match(/(\d+)\s*(\+)?\s*-?\s*(bhk|bedrooms?|bed)\b/i);
+  if (!m) return { exact: null, atLeast: null };
+  const n = Number(m[1]);
+  return m[2] ? { exact: null, atLeast: n } : { exact: n, atLeast: null };
+}
+
+function fromTextAny(filters) {
+  const t = bedroomsFromText(`${filters.query ?? ''} ${filters.category ?? ''}`);
+  return t.exact || t.atLeast;
+}
+
 export function buildCriteria(filters = {}) {
   const subtypes = new Set([
     ...detectSubtypes(filters.category),
@@ -34,7 +55,7 @@ export function buildCriteria(filters = {}) {
 
   let categories = normalizeCategory(filters.category);
   if (!categories.length) categories = categoriesFromSubtypes(subtypes);
-  if (!categories.length && (filters.bedrooms || filters.minBedrooms)) categories = ['residential'];
+  if (!categories.length && (filters.bedrooms || filters.minBedrooms || fromTextAny(filters))) categories = ['residential'];
 
   const notes = [...(filters.dealBreakers ?? []), ...(filters.mustHaves ?? [])].join(' ').toLowerCase();
   const readyOnly =
@@ -42,14 +63,17 @@ export function buildCriteria(filters = {}) {
     /ready to move|under.?construction/.test(notes) ||
     /ready to move/.test(String(filters.status ?? '').toLowerCase());
 
-  const areaText = filters.location?.trim() || null;
+  const areaText = isVagueArea(filters.location) ? null : filters.location?.trim() || null;
+  const fromText = bedroomsFromText(`${filters.query ?? ''} ${filters.category ?? ''}`);
+  const bedrooms = filters.bedrooms ?? (filters.minBedrooms ? null : fromText.exact);
+  const minBedrooms = filters.minBedrooms ?? (filters.bedrooms ? null : fromText.atLeast);
 
   return {
     area: areaText ? { text: areaText, entry: resolveArea(areaText) } : null,
     categories,
     subtypes,
-    bedrooms: filters.bedrooms ?? null,
-    minBedrooms: filters.minBedrooms ?? null,
+    bedrooms: bedrooms ?? null,
+    minBedrooms: minBedrooms ?? null,
     bathrooms: filters.bathrooms ?? null,
     minBudget: filters.minBudget ?? null,
     maxBudget: filters.maxBudget ?? null,

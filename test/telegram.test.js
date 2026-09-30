@@ -3,7 +3,7 @@ import test from 'node:test';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { addToShortlist, getLead, setBotState, upsertLeadMemory } from '../src/leadMemory.js';
-import { guardAmounts, withoutDashes } from '../src/telegram/agent.js';
+import { guardAmounts, mentionUnavailable, moneyHint, withoutDashes } from '../src/telegram/agent.js';
 import { createBot } from '../src/telegram/bot.js';
 import { FALLBACK, NON_TEXT, OFF_TOPIC, RATE_LIMITED, STALE_PROPERTY, TOO_LONG } from '../src/telegram/copy.js';
 import { Cr, L, properties } from './fixtures/properties.js';
@@ -513,4 +513,64 @@ test('replies never contain em or en dashes', async () => {
   const h = harness({ generate: async () => ({ text: 'Pricing is handled by sales—happy to arrange a visit.' }) });
   await h.send(say('can you reduce the price?'));
   assert.equal(h.toUser().at(-1).text, 'Pricing is handled by sales, happy to arrange a visit.');
+});
+
+test('a lead who already has a profile is never silenced by the scope check', async () => {
+  let classified = 0;
+  const h = harness({ generate: async ({ prompt }) => (prompt ? (classified++, { text: 'NO' }) : { text: 'Here are cheaper options.' }) });
+  await seedLead(h, { budgetMax: Cr(5) }, 'interested');
+  await h.send(say('show me something cheaper'));
+  assert.equal(classified, 0);
+  assert.equal(h.toUser().at(-1).text, 'Here are cheaper options.');
+});
+
+test('an unanswered search claim is retried with a tool forced on the first step', async () => {
+  const calls = [];
+  const h = harness({
+    generate: async (options) => {
+      calls.push(options);
+      if (calls.length === 1) return { text: 'Searching for 3 BHK in Anna Nagar now.' };
+      await options.tools.search_properties.execute({ location: 'Anna Nagar', category: 'residential', bedrooms: 3 }, toolCall);
+      return { text: 'Here are the closest options.' };
+    }
+  });
+  await seedLead(h, {}, 'interested');
+  await h.send(say('3 bhk in anna nagar'));
+
+  assert.equal(calls.length, 2);
+  assert.deepEqual(calls[1].prepareStep({ stepNumber: 0 }), { toolChoice: 'required' });
+  assert.deepEqual(calls[1].prepareStep({ stepNumber: 1 }), {});
+  assert.ok(h.toUser().some((m) => /How it differs|Matches your requirements/.test(m.text)), 'cards were sent');
+  assert.equal(h.toUser().at(-1).text, 'Here are the closest options.');
+});
+
+test('a clarifying question may repeat the number the customer typed, with any unit', () => {
+  assert.equal(guardAmounts('Do you mean 80 lakh or 80 crore?', [], 'budget is around 80').blocked, false);
+  assert.equal(guardAmounts('Do you mean 90 lakh or 90 crore?', [], 'budget is around 80').blocked, true);
+});
+
+test('money in the customer\'s message is read by code and handed to the model as a fact', () => {
+  assert.match(moneyHint('150L to 2 crore'), /minimum ₹1.5 Cr, maximum ₹2 Cr/);
+  assert.match(moneyHint('150L to 2 crore'), /do not ask about them/);
+  assert.match(moneyHint('3BHK in OMR under 1.5C'), /maximum ₹1.5 Cr/);
+  assert.match(moneyHint('my budget is around 80'), /no unit/);
+  assert.match(moneyHint('budget 2 crore to 1 crore'), /wrong way round/);
+  assert.equal(moneyHint('I need 2 bedrooms'), '');
+  assert.equal(moneyHint('show me flats in Anna Nagar'), '');
+});
+
+test('numbers that describe the property are not read as money', () => {
+  assert.match(moneyHint('Anna Nagar la 3 BHK venum, budget 2 crore'), /maximum ₹2 Cr/);
+  assert.doesNotMatch(moneyHint('Anna Nagar la 3 BHK venum, budget 2 crore'), /wrong way round/);
+  assert.equal(moneyHint('3 BHK in Anna Nagar'), '');
+  assert.equal(moneyHint('1200 sq ft plot 5 km from OMR'), '');
+  assert.match(moneyHint('2 bedroom, 70 lakh'), /maximum ₹70 L/);
+});
+
+test('a sold or reserved match is always named, even if the model forgets', () => {
+  const unavailable = [{ title: 'Exclusive Rooftop Penthouse', status: 'sold' }];
+  assert.equal(mentionUnavailable('Here is a close option.', unavailable), 'Here is a close option. Note: Exclusive Rooftop Penthouse is sold.');
+  assert.equal(mentionUnavailable('The penthouse is sold, sorry.', unavailable), 'The penthouse is sold, sorry.');
+  assert.equal(mentionUnavailable('Hello', []), 'Hello');
+  assert.match(mentionUnavailable('Hi', [{ title: 'Showroom', status: 'reserved' }]), /Showroom is reserved/);
 });

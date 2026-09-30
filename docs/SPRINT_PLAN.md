@@ -107,23 +107,28 @@ Status: built and verified on 2026-10-01, except the public-key check below. 57 
 
 ## Sprint P2: The Telegram bot
 
-- [ ] `grammy`; polling mode for local work, webhook on Railway with a secret header (401 otherwise); in-memory duplicate check; reply 200 fast and process in the background.
-- [ ] Private chats only; text and button taps only; one message at a time per chat.
-- [ ] `/start`: intro, category quick-pick buttons, one line saying listings are indicative. Creates the Lead at `initiated`.
-- [ ] AI layer (`ai` + `@ai-sdk/openai`, model from `OPENAI_MODEL`): `systemPrompt.js` and tools `search_properties`, `get_property`, `save_requirements`, `request_site_visit`. Results first, one question at a time, no legal or investment advice, yields "as stated by seller".
-- [ ] Lead hydration and the last 20 messages from `chat_messages`; a record of the properties last shown, so "tell me about the second one" works.
-- [ ] Cards: Match cards say "✅ Matches your requirements"; Recommendation cards say "💡 Close option" and list the differences. Buttons: 📅 Book Site Visit, ⭐ Shortlist (toggles), Show more.
-- [ ] Button taps run without the model: re-check the property is still available, update the stage, record the event.
-- [ ] Sales desk alert on site visit: Lead name, handle, budget, area, property.
-- [ ] Offer a "Share my number" button when a visit is requested.
-- [ ] Off-topic guard on the first message (one polite line, then silence; greetings count as on-topic; if the check fails, treat as on-topic). Per-lead limit of 20 messages per hour and 1,000 characters.
-- [ ] Output guard: amounts in the model's text must come from tool results or the Lead's own message.
-- [ ] 10-second model timeout with the PRD's fallback message.
-- [ ] Production safety: refuse to start in production without the bearer token; turn the WhatsApp tool routes off by default; remove open CORS; do not return upstream error text.
-- [ ] Deploy to Railway, register the webhook.
-- [ ] Tests with a mocked model; a first eval set of about 20 of the 50 test leads, asserting on tool calls and forbidden content, not on exact wording.
+Status: built and verified on 2026-10-01 on a laptop. Railway deploy moved to after P3. 92 tests pass; the eval set passes 49 to 50 of 50 leads per run (149 of 150 over three runs).
 
-**Done when (live):** scenes 1 to 3 and 6 of the demo work on the real bot; the Triplicane and "1.5C" cases call the search with the right arguments; a stored budget is reused later in the chat; no null-price listing ever shows a number.
+- [x] `grammy`; polling mode for local work, webhook on Railway with a constant-time secret check (401 otherwise); duplicate-update check; answers 200 at once and processes afterwards.
+- [x] Private chats only; text and button taps only; one message at a time per chat (taps on their own lane).
+- [x] `/start` with category quick-pick buttons and a one-line "indicative" notice; creates the Lead at `initiated`; records a campaign code from a deep link. Also `/help`, `/saved`, `/reset`.
+- [x] AI layer (`ai` v7 + `@ai-sdk/openai`, `gpt-5-mini`, reasoning effort minimal): `search_properties`, `get_property`, `save_requirements`, `request_site_visit`. Customer id is bound by code.
+- [x] Lead hydration, last 20 messages from `chat_messages`, and what was last shown, so "the second one" works.
+- [x] Cards built in code: Match cards, Close option cards with differences, Shortlist and Book Site Visit buttons, Show more.
+- [x] Button taps run without the model: re-check the property, update the stage, record the event, answer the callback.
+- [x] Sales desk alert on site visit, to `SALES_DESK_CHAT_ID` (your own Telegram account for the demo), marked sent on success.
+- [x] Share-my-number button after a visit request; only the customer's own number is accepted.
+- [x] Off-topic guard on a brand-new lead's first message (one polite line, then silence). Known leads are never silenced. Rate limit of 20 messages per hour and 1,000 characters.
+- [x] Output guards: every amount in a reply must come from a tool result, the customer's words or their saved budget; no em or en dashes; a sold or reserved match is always named; "searching" with no search triggers a retry that forces a tool call.
+- [x] Money is read by code (`150L`, `1.5C`, ranges, missing units) and handed to the model as a fact.
+- [x] Production safety: tool routes off by default in production; refuses to start in production without the bearer token; no open CORS; upstream error text hidden.
+- [x] Eval harness (`npm run eval`, see below).
+- [ ] Deploy to Railway and register the webhook. Moved to after Sprint P3.
+- [ ] Known gap: the model timeout is 25 seconds, not the PRD's 10, because a tool turn cannot reliably finish in 10.
+
+**Done when (live):** scenes 1 to 3 and 6 of the demo work on the real bot. Met on a laptop; the live Telegram test of scenes 1 to 6 passed on 2026-10-01.
+
+**Evals.** `npm run eval` runs test leads through the real model on an in-memory copy of the inventory and checks behaviour, not wording: tool arguments, cards shown or hidden, stages, forbidden content (invented prices, discounts, photos, dashes, leaked ids). `--all` runs all 50, `--lead 011,014` chosen ones, `--tag near-miss` a group, `--verbose` prints conversations. Failures always print the conversation. It costs about 230,000 tokens (a few cents) per full run.
 
 ## Sprint P3: Lead board and demo polish
 

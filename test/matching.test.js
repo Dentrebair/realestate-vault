@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { findMatches } from '../src/matching.js';
+import { bedroomsFromText, findMatches } from '../src/matching.js';
 import { searchProperties } from '../src/propertySearch.js';
 import { Cr, L, properties } from './fixtures/properties.js';
 import { createFakeSupabase } from './helpers/fakeSupabase.js';
@@ -235,4 +235,26 @@ test('searchProperties pages the matches and leaves the sold ones out', async ()
 
   const second = await searchProperties(supabase, { maxBudget: Cr(100), limit: 3, offset: 3 });
   assert.ok(!ids(first.results).some((id) => ids(second.results).includes(id)));
+});
+
+test('BHK typed into the free-text field still counts as a bedroom requirement', () => {
+  assert.deepEqual(bedroomsFromText('3 BHK'), { exact: 3, atLeast: null });
+  assert.deepEqual(bedroomsFromText('3bhk flat'), { exact: 3, atLeast: null });
+  assert.deepEqual(bedroomsFromText('3+ bhk'), { exact: null, atLeast: 3 });
+  assert.deepEqual(bedroomsFromText('sea facing'), { exact: null, atLeast: null });
+
+  const typed = findMatches(properties, { location: 'Anna Nagar', query: '3 BHK', maxBudget: Cr(2) });
+  const given = findMatches(properties, { location: 'Anna Nagar', category: 'residential', bedrooms: 3, maxBudget: Cr(2) });
+  assert.equal(typed.outcome, given.outcome);
+  assert.deepEqual(typed.criteria.bedrooms, 3);
+  assert.deepEqual(typed.criteria.categories, ['residential']);
+});
+
+test('a vague area such as "not far from the city" is no area at all', () => {
+  for (const vague of ['near the city', 'not far from the city', 'anywhere in Chennai', 'central Chennai']) {
+    const found = findMatches(properties, { location: vague, category: 'plot' });
+    assert.equal(found.criteria.area, null, vague);
+    assert.ok(found.matches.length > 0, vague);
+  }
+  assert.equal(findMatches(properties, { location: 'OMR' }).criteria.area, 'OMR');
 });

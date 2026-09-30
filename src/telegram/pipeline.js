@@ -19,6 +19,11 @@ export async function handleText(ctx, deps) {
 
   const lead = await ensureLead(supabase, ctx.from);
 
+  // Only someone we know nothing about is checked. A lead who already has a profile is on topic.
+  if (lead.botState?.scope !== 'on_topic' && lead.leadStage !== 'initiated') {
+    await setBotState(supabase, customerId, { scope: 'on_topic' });
+    lead.botState = { ...lead.botState, scope: 'on_topic' };
+  }
   if (lead.botState?.scope !== 'on_topic') {
     const verdict = await scopeOf(text, deps.agent);
     if (verdict === 'off_topic') {
@@ -61,6 +66,7 @@ function keepTyping(api, chatId) {
 }
 
 export function log(event, fields = {}, level = 'info') {
+  if (process.env.QUIET_LOGS) return;
   const line = JSON.stringify({ at: new Date().toISOString(), event, ...fields });
   (level === 'error' ? console.error : console.log)(line);
 }

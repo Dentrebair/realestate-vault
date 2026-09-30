@@ -8,7 +8,8 @@
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
     "test": "node --test test/*.test.js",
-    "seed:test-leads": "node scripts/seed-test-leads.js"
+    "seed:test-leads": "node scripts/seed-test-leads.js",
+    "eval": "node evals/run.js"
   },
   "dependencies": {
     "@ai-sdk/openai": "^4.0.83",

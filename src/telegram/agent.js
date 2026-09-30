@@ -2,7 +2,7 @@
 import { generateText, isStepCount, tool } from 'ai';
 import { z } from 'zod';
 import { setBotState, setStage, upsertLeadMemory, leadMemorySchema } from '../leadMemory.js';
-import { parseAmount, toInr } from '../money.js';
+import { formatInr, parseAmount, parseBudgetRange, toInr } from '../money.js';
 import { getProperty, searchProperties } from '../propertySearch.js';
 import { CATEGORIES } from '../propertyTypes.js';
 import { visitPrompt } from './cards.js';
@@ -27,7 +27,7 @@ export function createDeps(overrides = {}) {
 
 export async function runAgentTurn({ deps, supabase, api, chatId, lead, history, text }) {
   const customerId = lead.customerId;
-  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [] };
+  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [] };
 
   const record = (output) => {
     state.toolOutputs.push(JSON.stringify(output));
@@ -138,17 +138,30 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     })
   };
 
-  const result = await deps.generate({
-    model: deps.model,
-    instructions: buildInstructions(lead),
-    messages: [...history, { role: 'user', content: text }],
-    tools,
-    stopWhen: isStepCount(MAX_STEPS),
-    abortSignal: AbortSignal.timeout(deps.timeoutMs),
-    providerOptions: deps.providerOptions
-  });
+  const instructions = `${buildInstructions(lead)}${moneyHint(text)}`;
+  const messages = [...history, { role: 'user', content: text }];
+  const abortSignal = AbortSignal.timeout(deps.timeoutMs);
+  const run = (extra = {}) =>
+    deps.generate({
+      model: deps.model,
+      instructions,
+      messages,
+      tools,
+      stopWhen: isStepCount(MAX_STEPS),
+      abortSignal,
+      providerOptions: deps.providerOptions,
+      ...extra
+    });
 
-  const guarded = guardAmounts(result.text ?? '', [text, JSON.stringify(leadBudgets(lead)), ...state.toolOutputs]);
+  let result = await run();
+
+  // The model sometimes says "searching now" and stops without searching. Run the turn again with the
+  // first step forced to use a tool, so the customer is not left waiting for results that never come.
+  if (!state.toolOutputs.length && claimsToAct(result.text)) {
+    result = await run({ prepareStep: ({ stepNumber }) => (stepNumber === 0 ? { toolChoice: 'required' } : {}) });
+  }
+
+  const guarded = guardAmounts(result.text ?? '', [text, JSON.stringify(leadBudgets(lead)), ...state.toolOutputs], text);
   const reply = guarded.blocked
     ? state.shown.length
       ? 'Please see the details in the cards above.'
@@ -156,11 +169,20 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     : guarded.text || (state.shown.length ? 'Here is what I found.' : 'Could you tell me a little more about what you are looking for?');
 
   return {
-    text: withoutDashes(reply).slice(0, MAX_REPLY_CHARS),
+    text: withoutDashes(mentionUnavailable(reply, state.unavailable)).slice(0, MAX_REPLY_CHARS),
     blocked: guarded.blocked,
     shown: state.shown,
     usage: result.usage
   };
+}
+
+// A sold or reserved property that matched the request must be named as such. The model is told to,
+// and this makes sure: if it leaves that out, one plain sentence is added.
+export function mentionUnavailable(reply, unavailable = []) {
+  const first = unavailable[0];
+  if (!first || /\b(sold|reserved|no longer available|not available|unavailable)\b/i.test(reply)) return reply;
+  const state = first.status === 'sold' ? 'sold' : 'reserved';
+  return `${reply.trim()} Note: ${first.title} is ${state}.`;
 }
 
 // ---- search tool ---------------------------------------------------------------------------
@@ -200,6 +222,7 @@ async function searchTool({ input, supabase, api, chatId, lead, state }) {
 
   const views = await sendSearchResult(api, chatId, result, lead);
   state.shown = rememberShown(views);
+  state.unavailable = result.unavailable;
 
   const { customerId: _omit, offset: _offset, limit: _limit, ...remembered } = filters;
   await setBotState(supabase, lead.customerId, {
@@ -243,6 +266,28 @@ export function withoutDashes(text) {
     .replace(/,\s*,/g, ',');
 }
 
+// Amounts are read by code, not by the model: "150L" is 150 lakh and "1.5C" is 1.5 crore, every time.
+// The result goes to the model as a fact, so it neither misreads a unit nor asks about one that is there.
+const MONEY_WORDS = /\b(budget|price|cost|afford|spend|max|maximum|minimum|under|below|within|upto|up to|around|about|approx)\b/i;
+
+export function moneyHint(text) {
+  const range = parseBudgetRange(text);
+  if (!range) return '';
+
+  const head = "\n\nWHAT THE CUSTOMER'S LATEST MESSAGE SAYS ABOUT MONEY (read by our software; trust it)\n";
+  if (range.inverted) {
+    return `${head}- The range is the wrong way round. Ask which way they mean. Do not search or save a budget yet.`;
+  }
+  if (!range.unitKnown) {
+    if (!MONEY_WORDS.test(text)) return '';
+    return `${head}- An amount was given with no unit. Ask whether they mean lakh or crore. Do not search or save a budget yet.`;
+  }
+  const parts = [];
+  if (range.min !== undefined) parts.push(`minimum ${formatInr(range.min)}`);
+  if (range.max !== undefined) parts.push(`maximum ${formatInr(range.max)}`);
+  return `${head}- Budget: ${parts.join(', ')}. The units are clear; do not ask about them.`;
+}
+
 // ---- checks on what the model says ----------------------------------------------------------
 
 const AMOUNT =
@@ -255,11 +300,21 @@ function amountsIn(text) {
 }
 
 // Every amount in the reply must come from a tool result, the customer's own words, or their saved budget.
-export function guardAmounts(reply, sources) {
-  const allowed = sources.flatMap(amountsIn);
+export function guardAmounts(reply, sources, customerText = '') {
+  // "80" could mean 80 lakh or 80 crore; repeating their own number back with a unit is how we ask.
+  const theirNumbers = [...String(customerText).matchAll(/\d[\d,]*(?:\.\d+)?/g)]
+    .map((m) => Number(m[0].replace(/,/g, '')))
+    .flatMap((n) => [n * 1e5, n * 1e7]);
+  const allowed = [...sources.flatMap(amountsIn), ...theirNumbers];
   const close = (a, b) => Math.abs(a - b) <= Math.max(1, b * 0.02);
   const invented = amountsIn(reply).filter((v) => v >= 1000 && !allowed.some((a) => close(v, a)));
   return invented.length ? { text: '', blocked: true, invented } : { text: reply.trim(), blocked: false };
+}
+
+const ACTION_CLAIM = /\b(searching|let me (search|look|find|check|pull)|i(?:'|’)?ll (search|look|find|check|pull|show)|i will (search|look|find|check|pull|show))\b/i;
+
+export function claimsToAct(reply) {
+  return ACTION_CLAIM.test(String(reply ?? ''));
 }
 
 function leadBudgets(lead) {

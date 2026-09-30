@@ -57,9 +57,12 @@ export function parseAmount(text) {
   return { value: number, unitKnown: false };
 }
 
+// Numbers that describe the property, not the price: "3 BHK", "1200 sq ft", "5 km".
+const NOT_MONEY = /\b\d+(?:\.\d+)?\s*\+?\s*-?\s*(?:bhk|bedrooms?|beds?|bathrooms?|baths?|sq\.?\s?ft|sqft|square feet|km|kms|floors?|storeys?|acres?|cents?|grounds?|years?|%|percent)\b/gi;
+
 // "under 1.5C", "150L to 2 crore", "around 80 lakh", "2 crore to 1 crore".
 export function parseBudgetRange(text) {
-  const source = String(text ?? '');
+  const source = String(text ?? '').replace(NOT_MONEY, ' ');
   const found = [...source.matchAll(/(?:₹|rs\.?\s*|inr\s*)?\d[\d,]*(?:\.\d+)?\s*(?:crores?|cr|c|lakhs?|lacs?|lac|l)?(?![a-z])/gi)]
     .map((m) => ({ raw: m[0], amount: parseAmount(m[0]) }))
     .filter((m) => m.amount);

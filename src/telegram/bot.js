@@ -63,7 +63,7 @@ export function createBot({ token, botInfo, supabase, config, ai }) {
   return bot;
 }
 
-function modelFrom(config) {
+export function modelFrom(config) {
   if (!config.openaiApiKey) return {};
   const openai = createOpenAI({ apiKey: config.openaiApiKey });
   const reasoning = /^(gpt-5|o\d)/.test(config.openaiModel);

@@ -3,6 +3,19 @@ import { z } from 'zod';
 
 const blank = (value) => (value === '' ? undefined : value);
 
+// Tidies a web address people type into a settings page: quotes, spaces, a missing https://, a trailing path.
+export function normalizeUrl(value) {
+  if (value === undefined || value === null) return undefined;
+  let url = String(value).trim().replace(/^["']+|["']+$/g, '').trim();
+  if (!url) return undefined;
+  if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(url)) url = `https://${url}`;
+  try {
+    return new URL(url).origin;
+  } catch {
+    return url;
+  }
+}
+
 const configSchema = z.object({
   port: z.coerce.number().int().positive().default(3000),
   nodeEnv: z.string().default('development'),
@@ -49,7 +62,7 @@ const configSchema = z.object({
 const nodeEnv = blank(process.env.NODE_ENV) ?? 'development';
 const publicDomain = blank(process.env.RAILWAY_PUBLIC_DOMAIN);
 
-export const config = configSchema.parse({
+const parsed = configSchema.safeParse({
   port: blank(process.env.PORT),
   nodeEnv,
   supabaseUrl: blank(process.env.SUPABASE_URL),
@@ -62,7 +75,7 @@ export const config = configSchema.parse({
   telegramBotToken: blank(process.env.TELEGRAM_BOT_TOKEN),
   telegramWebhookSecret: blank(process.env.TELEGRAM_WEBHOOK_SECRET),
   telegramMode: blank(process.env.TELEGRAM_MODE),
-  publicBaseUrl: blank(process.env.PUBLIC_BASE_URL) ?? (publicDomain ? `https://${publicDomain}` : undefined),
+  publicBaseUrl: normalizeUrl(blank(process.env.PUBLIC_BASE_URL) ?? publicDomain),
   salesDeskChatId: blank(process.env.SALES_DESK_CHAT_ID),
   businessHours: blank(process.env.BUSINESS_HOURS),
   teamConfirmLine: blank(process.env.TEAM_CONFIRM_LINE),
@@ -86,6 +99,15 @@ export const config = configSchema.parse({
       ? process.env.ENABLE_TOOL_ROUTES === 'true'
       : nodeEnv !== 'production'
 });
+
+if (!parsed.success) {
+  console.error('The settings are not valid:');
+  for (const issue of parsed.error.issues) console.error(`  ${issue.path.join('.') || '(settings)'}: ${issue.message}`);
+  console.error('Fix the variables named above and redeploy.');
+  process.exit(1);
+}
+
+export const config = parsed.data;
 
 export const isSupabaseConfigured =
   Boolean(config.supabaseUrl) && Boolean(config.supabaseServiceRoleKey);

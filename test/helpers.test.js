@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { normalizeUrl } from '../src/config.js';
 import { formatInr, parseAmount, parseBudgetRange, priceDisplay, toInr } from '../src/money.js';
 import { areaDistance, locateProperty, resolveArea } from '../src/microMarkets.js';
 import { detectSubtypes, normalizeCategory } from '../src/propertyTypes.js';
@@ -114,4 +115,15 @@ test('stage rules: who may move a lead where', () => {
   assert.equal(canTransition('interested', 'interested', 'system').noop, true);
   assert.equal(canTransition('initiated', 'nonsense', 'system').ok, false);
   assert.equal(canTransition('initiated', 'interested', 'stranger').ok, false);
+});
+
+test('a web address typed into a settings page is tidied, not rejected', () => {
+  assert.equal(normalizeUrl('your-service-production.up.railway.app'), 'https://your-service-production.up.railway.app');
+  assert.equal(normalizeUrl('https://x.up.railway.app/'), 'https://x.up.railway.app');
+  assert.equal(normalizeUrl('  "https://x.up.railway.app"  '), 'https://x.up.railway.app');
+  assert.equal(normalizeUrl("'x.up.railway.app'"), 'https://x.up.railway.app');
+  assert.equal(normalizeUrl('https://x.up.railway.app/telegram/webhook'), 'https://x.up.railway.app');
+  assert.equal(normalizeUrl('http://localhost:3000/'), 'http://localhost:3000');
+  assert.equal(normalizeUrl(''), undefined);
+  assert.equal(normalizeUrl(undefined), undefined);
 });

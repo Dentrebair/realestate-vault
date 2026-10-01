@@ -7,3 +7,10 @@ const NEGOTIATION =
 export function isNegotiation(text) {
   return NEGOTIATION.test(String(text ?? ''));
 }
+
+// Asking about photos is answered from the real data by code. The model is never asked to guess what exists.
+const PHOTOS = /\b(photos?|images?|pictures?|pics?|gallery|galleries)\b/i;
+
+export function asksAboutPhotos(text) {
+  return PHOTOS.test(String(text ?? ''));
+}

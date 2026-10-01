@@ -34,6 +34,7 @@ export async function sendSearchResult({ api, supabase, chatId, result, lead }) 
   });
 
   for (const view of views) {
+    view.photoCount = photos.get(view.id)?.length ?? 0;
     await sendCard(api, chatId, view, { saved: saved.has(view.id), photos: photos.get(view.id) ?? [] });
   }
   if (result.nextOffset !== null && result.nextOffset !== undefined) {
@@ -46,5 +47,5 @@ export async function sendSearchResult({ api, supabase, chatId, result, lead }) 
 
 // What the bot remembers about a result so "the second one" and "show more" work next turn.
 export function rememberShown(views) {
-  return views.map((v) => ({ id: v.id, title: v.title, location: v.location, priceDisplay: v.priceDisplay }));
+  return views.map((v) => ({ id: v.id, title: v.title, location: v.location, priceDisplay: v.priceDisplay, photoCount: v.photoCount ?? 0 }));
 }

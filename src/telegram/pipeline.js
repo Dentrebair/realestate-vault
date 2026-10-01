@@ -1,10 +1,11 @@
 // A text message from a Lead: guards, memory, the model, and the reply.
 import { setBotState, setStage } from '../leadMemory.js';
 import { runAgentTurn } from './agent.js';
-import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, RATE_LIMITED, TOO_LONG } from './copy.js';
+import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, PHOTOS_GENERAL, RATE_LIMITED, TOO_LONG, photosAnswer } from './copy.js';
+import { loadPhotos } from '../photos.js';
 import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
-import { isNegotiation } from './intent.js';
+import { asksAboutPhotos, isNegotiation } from './intent.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { failureAlert, notifySales } from './sales.js';
 import { scopeOf } from './scope.js';
@@ -46,6 +47,19 @@ export async function handleText(ctx, deps) {
       actor: 'system',
       reason: 'asked about price or a discount'
     }).catch((error) => log('stage_failed', { customerId, error: error.message }, 'error'));
+  }
+
+  // "Do you have images?" is a question about data, so code answers it from the data.
+  if (asksAboutPhotos(text)) {
+    const shown = lead.botState?.shown ?? [];
+    const found = shown.length ? await loadPhotos(supabase, shown.map((p) => p.id)).catch(() => new Map()) : new Map();
+    const answer = shown.length
+      ? photosAnswer(shown.map((p) => ({ title: p.title, count: found.get(p.id)?.length ?? 0 })))
+      : PHOTOS_GENERAL;
+    await saveMessage(supabase, customerId, 'user', text);
+    await ctx.reply(answer);
+    await saveMessage(supabase, customerId, 'assistant', answer);
+    return;
   }
 
   const stopTyping = keepTyping(api, chatId);

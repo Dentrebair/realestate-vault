@@ -48,3 +48,19 @@ export const SHARE_NUMBER_PROMPT =
   'If you would like our team to call you, tap the button to share your number. This is optional.';
 
 export const PHONE_THANKS = 'Thank you. Our team will use this number only to arrange your visit.';
+
+export const PHOTOS_GENERAL =
+  'Some of our listings have photos. On those cards you will see ◀ ▶ buttons under the picture to flip through them. ' +
+  'Tell me what you are looking for and I will show you what we have.';
+
+// What we really have for the properties just shown. Written by code from the database, never by the model.
+export function photosAnswer(items) {
+  const lines = items.map(({ title, count }) =>
+    count > 0
+      ? `• ${title}: ${count} photo${count === 1 ? '' : 's'}${count > 1 ? '. Use the ◀ ▶ buttons under its card to flip through them.' : ' on its card.'}`
+      : `• ${title}: no photos yet.`
+  );
+  const anyMissing = items.some((i) => i.count === 0);
+  const tail = anyMissing ? '\n\nThe best way to see a property without photos is a site visit. Tap Book Site Visit on its card.' : '';
+  return `${lines.join('\n')}${tail}`;
+}

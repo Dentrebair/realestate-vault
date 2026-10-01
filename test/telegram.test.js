@@ -3,8 +3,9 @@ import test from 'node:test';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { addToShortlist, getLead, setBotState, upsertLeadMemory } from '../src/leadMemory.js';
-import { claimsVisitButton, guardAmounts, mentionUnavailable, moneyHint, withoutBackstage, withoutDashes, withoutPhantomButtons } from '../src/telegram/agent.js';
-import { isNegotiation } from '../src/telegram/intent.js';
+import { claimsVisitButton, guardAmounts, mentionUnavailable, moneyHint, withoutBackstage, withoutCardTapping, withoutDashes, withoutPhantomButtons, withoutPhotoClaims } from '../src/telegram/agent.js';
+import { asksAboutPhotos, isNegotiation } from '../src/telegram/intent.js';
+import { buildInstructions } from '../src/telegram/systemPrompt.js';
 import { createBot } from '../src/telegram/bot.js';
 import { CAPTION_LIMIT, renderCard } from '../src/telegram/cards.js';
 import { FALLBACK, NON_TEXT, OFF_TOPIC, RATE_LIMITED, STALE_PROPERTY, TOO_LONG } from '../src/telegram/copy.js';
@@ -779,4 +780,66 @@ test('before the photos table exists, searches and /saved still work as text car
   await addToShortlist(h.supabase, ID, 'p03');
   await h.send(say('/saved'));
   assert.ok(h.toUser().some((m) => /Sky Mansion/.test(m.text)));
+});
+
+test('questions about photos are recognised', () => {
+  for (const yes of ['do you have images', 'show me photos', 'any pictures?', 'can I see pics', 'is there a gallery']) assert.equal(asksAboutPhotos(yes), true, yes);
+  for (const no of ['I need a house', '3BHK in OMR', 'what is the price', 'tell me more about the first one']) assert.equal(asksAboutPhotos(no), false, no);
+});
+
+test('"do you have images" is answered from the real photo counts, without the model', async () => {
+  let asked = 0;
+  const h = harness({ generate: async () => (asked++, { text: 'Listings have images in their cards, tap a card.' }), tables: { property_photos: photoRows('p04', 3) } });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { shown: [
+    { id: 'p04', title: 'High-Rise 2BHK Apartment', priceDisplay: '₹62 L' },
+    { id: 'p11', title: 'Villa Plot', priceDisplay: '₹84 L' }
+  ] });
+  await h.send(say('do you have images'));
+
+  assert.equal(asked, 0, 'the model is not asked');
+  const reply = h.toUser().at(-1).text;
+  assert.match(reply, /High-Rise 2BHK Apartment: 3 photos\. Use the ◀ ▶ buttons/);
+  assert.match(reply, /Villa Plot: no photos yet\./);
+  assert.doesNotMatch(reply, /tap a card/i);
+  assert.deepEqual(h.rows('chat_messages').map((m) => m.role), ['user', 'assistant']);
+});
+
+test('with nothing shown yet, the photo answer is general and does not promise any', async () => {
+  const h = harness();
+  await seedLead(h, {}, 'interested');
+  await h.send(say('any photos?'));
+  assert.match(h.toUser().at(-1).text, /Some of our listings have photos/);
+  assert.match(h.toUser().at(-1).text, /◀ ▶/);
+});
+
+test('the model is told how many photos each shown property has', async () => {
+  const h = harness({ generate: searchNavalur, tables: { property_photos: photoRows('p04', 2) } });
+  await h.send(say('2BHK in OMR'));
+  const lead = await getLead(h.supabase, ID);
+  assert.equal(lead.botState.shown[0].photoCount, 2);
+  const prompt = buildInstructions(lead);
+  assert.match(prompt, /High-Rise 2BHK Apartment near Tech Parks \(₹62 L, 2 photos\)/);
+  assert.match(buildInstructions({ ...lead, botState: { shown: [{ title: 'Plot', priceDisplay: '₹84 L', photoCount: 0 }] } }), /Plot \(₹84 L, no photos\)/);
+  assert.match(prompt, /never say a card can be tapped or opened/i);
+});
+
+test('talk of photos is removed when nothing in play has any', async () => {
+  assert.equal(withoutPhotoClaims('I found a flat. Which detail would you like next, photos or site visit?', false), 'I found a flat.');
+  assert.equal(withoutPhotoClaims('I found a flat. There are no photos yet.', false), 'I found a flat. There are no photos yet.');
+  assert.equal(withoutPhotoClaims('I found a flat. Use the arrows to see photos.', true), 'I found a flat. Use the arrows to see photos.');
+  assert.equal(withoutPhotoClaims('I found a flat.', false), 'I found a flat.');
+
+  const h = harness({ generate: async ({ tools }) => {
+    await tools.search_properties.execute({ category: 'residential', location: 'Tambaram' }, toolCall);
+    return { text: 'This one is available. Would you like to see photos or book a visit?' };
+  } });
+  await h.send(say('1BHK in Tambaram'));
+  assert.equal(h.toUser().at(-1).text, 'This one is available.');
+});
+
+test('"tap the card" is removed, because the card itself is not tappable', () => {
+  assert.equal(withoutCardTapping('I found one 1BHK. Tap the card to see details. Want a site visit?'), 'I found one 1BHK. Want a site visit?');
+  assert.equal(withoutCardTapping('Tap Book Site Visit under the card to request a visit.'), 'Tap Book Site Visit under the card to request a visit.');
+  assert.equal(withoutCardTapping('Listings have images in their cards, tap a card to view them.'), '');
 });

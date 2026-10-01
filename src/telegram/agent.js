@@ -3,6 +3,7 @@ import { generateText, isStepCount, tool } from 'ai';
 import { z } from 'zod';
 import { setBotState, setStage, upsertLeadMemory, leadMemorySchema } from '../leadMemory.js';
 import { formatInr, parseAmount, parseBudgetRange, toInr } from '../money.js';
+import { loadPhotos } from '../photos.js';
 import { getProperty, searchProperties } from '../propertySearch.js';
 import { CATEGORIES } from '../propertyTypes.js';
 import { visitPrompt } from './cards.js';
@@ -64,10 +65,11 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
         const found = await getProperty(supabase, id);
         if (!found) return record({ error: 'That property is no longer listed.' });
         const { view } = found;
+        const photos = (await loadPhotos(supabase, [id]).catch(() => new Map())).get(id) ?? [];
         return record({
           id: view.id, title: view.title, location: view.location, category: view.category,
           status: view.statusLabel, price: view.priceDisplay, bedrooms: view.bedrooms,
-          highlights: view.highlights, rera: view.rera
+          highlights: view.highlights, rera: view.rera, photos: photos.length
         });
       }
     }),
@@ -179,7 +181,10 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
 
   return {
     text: withoutDashes(
-      mentionUnavailable(withoutPhantomButtons(withoutBackstage(reply), state.visitPromptSent), state.unavailable)
+      mentionUnavailable(
+        withoutPhotoClaims(withoutPhantomButtons(withoutCardTapping(withoutBackstage(reply)), state.visitPromptSent), state.shown.some((p) => p.photoCount > 0)),
+        state.unavailable
+      )
     ).slice(0, MAX_REPLY_CHARS),
     blocked: guarded.blocked,
     shown: state.shown,
@@ -194,6 +199,24 @@ const BACKSTAGE =
 export function withoutBackstage(reply) {
   const text = String(reply).replace(/\s*\([^()]*\)/g, (match) => (BACKSTAGE.test(match) ? '' : match));
   const kept = text.split(/(?<=[.!?])\s+/).filter((sentence) => !BACKSTAGE.test(sentence));
+  return kept.join(' ').trim();
+}
+
+// Cards have buttons, but the card itself is not tappable. "Tap the card to see details" is never true.
+const TAP_CARD = /\b(tap|click|press|open|select) (on )?(a|the|that|this|each|any) (card|property|listing|picture|image)\b/i;
+
+export function withoutCardTapping(reply) {
+  if (!TAP_CARD.test(reply)) return reply;
+  return reply.split(/(?<=[.!?])\s+/).filter((sentence) => !TAP_CARD.test(sentence)).join(' ').trim();
+}
+
+// With no photos on any property in play, a sentence about photos is wrong. Honest "no photos yet" lines are kept.
+const PHOTO_WORDS = /\b(photos?|images?|pictures?|pics?|gallery|galleries)\b/i;
+const NEGATION = /\b(no|not|none|don'?t|do not|without|yet)\b/i;
+
+export function withoutPhotoClaims(reply, anyPhotos) {
+  if (anyPhotos || !PHOTO_WORDS.test(reply)) return reply;
+  const kept = reply.split(/(?<=[.!?])\s+/).filter((sentence) => !PHOTO_WORDS.test(sentence) || NEGATION.test(sentence));
   return kept.join(' ').trim();
 }
 
@@ -280,6 +303,7 @@ async function searchTool({ input, supabase, api, chatId, lead, state }) {
       price: v.priceDisplay,
       bedrooms: v.bedrooms,
       status: v.statusLabel,
+      photos: v.photoCount ?? 0,
       differences: v.differences
     })),
     totalMatches: result.totalMatches,

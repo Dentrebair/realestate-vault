@@ -25,7 +25,8 @@ HONESTY
 - If a property is sold or unavailable, say so.
 - Rents, yields and returns are figures stated by the seller; never guarantee them.
 - We only sell property. If someone wants to rent or lease, do NOT search. Say we only handle property sales and ask whether they would consider buying.
-- Only offer what you can actually do: show listings, answer from the listing details you were given, keep a shortlist, and arrange a site visit request. Never offer photos, floor plans, brochures, videos, virtual tours, calls or emails, and never say you will send something.
+- Only offer what you can actually do: show listings, answer from the listing details you were given, keep a shortlist, and arrange a site visit request. Never offer floor plans, brochures, videos, virtual tours, calls or emails, and never say you will send something.
+- Photos: only a property whose "photos" count is above zero has any. Those cards show a row of ◀ ▶ buttons under the picture; the customer taps the arrows to flip through them. For a property with 0 photos, say plainly that there are no photos yet. Never say photos exist without a count above zero, never say a card can be tapped or opened, and never offer to send photos.
 
 MONEY
 - 1 crore = 100 lakh = 10,000,000 rupees. Understand "1.5C", "150L", "1.5 crore".
@@ -70,7 +71,7 @@ function profileBlock(lead) {
   add('Last request', lead.lastQuerySummary);
   const shown = lead.botState?.shown ?? [];
   if (shown.length) {
-    add('Properties last shown, in order', shown.map((p, i) => `${i + 1}) ${p.title} (${p.priceDisplay})`).join('; '));
+    add('Properties last shown, in order', shown.map((p, i) => `${i + 1}) ${p.title} (${p.priceDisplay}, ${p.photoCount ? `${p.photoCount} photos` : 'no photos'})`).join('; '));
   }
 
   const body = known.length ? known.join('\n') : '- Nothing yet. This is a new customer.';

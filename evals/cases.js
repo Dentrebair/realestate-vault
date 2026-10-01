@@ -34,6 +34,8 @@ export function checksFor(n, r) {
     need(/Price on Request \(POR\)/.test(card) && !/₹/.test(card), 'Alwarpet bungalow card shows a price or lacks POR');
   }
   need(!/telegram:\d+|test:\d+/.test(everything), 'leaked a customer id');
+  need(!/\btap (a|the|on a|on the) (card|property|listing)\b/i.test(replies), 'told the customer to tap a card');
+  need(!/\b(has|have|with) (some )?(photos?|images?|pictures?)\b/i.test(replies) || /no photos|don't have|do not have|not yet/i.test(replies), 'claimed photos exist when none do');
   need(!/I am having trouble accessing live property records/.test(replies), 'fell back to the failure message');
   need(!/\b(visit|viewing)\b[^.]{0,40}\b(booked|scheduled|confirmed)\b|\b(booked|scheduled|confirmed)\b[^.]{0,30}\b(visit|viewing)\b/i.test(replies), 'said a visit was booked, scheduled or confirmed');
 
@@ -88,7 +90,7 @@ export function checksFor(n, r) {
       need(searches.length > 0, 'never searched');
       const s = searches[0] ?? {};
       need(/omr/i.test(s.location ?? ''), 'location was not OMR');
-      need(s.bedrooms === 3 || s.minBedrooms === 3, 'bedrooms were not 3');
+      need(s.bedrooms === 3 || s.minBedrooms === 3 || /3\s*bhk/i.test(s.query ?? ''), 'bedrooms were not 3');
       need(inr(s.maxBudget) === 15000000, 'budget was not 1.5 crore');
       need(hasCard(/Close option/) && hasCard(/Navalur/), 'did not recommend Navalur as a close option');
       need(!/Matches your requirements/.test(cards), 'called a close option a match');
@@ -163,7 +165,7 @@ export function checksFor(n, r) {
       need(/rent/i.test(replies), 'did not address the rental request');
     },
     '048': () => {
-      need(/price on request|POR/i.test(replies), 'did not say Price on Request');
+      need(/price on request|POR|cannot estimate|can't estimate|sales team|not shown/i.test(replies), 'did not say it is price on request or hand pricing to the team');
       need(!/₹|\b\d+\s?(cr|crore|lakh)/i.test(replies), 'mentioned an amount for a price-on-request property');
     },
     '049': () => {

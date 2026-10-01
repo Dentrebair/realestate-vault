@@ -35,7 +35,7 @@ decides which tool to call. Checks around it stop it inventing prices, promising
 
 ## Setup
 
-You need Node 20 or newer, a Supabase project, an OpenAI key and a Telegram bot from @BotFather.
+You need Node 22 or newer, a Supabase project, an OpenAI key and a Telegram bot from @BotFather.
 
 ```bash
 npm install

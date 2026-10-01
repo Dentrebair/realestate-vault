@@ -12,6 +12,13 @@ branch** (the default branch, `main`, is the WhatsApp version).
   works if `004` or `005` is missing (agreeing, answers and photos all degrade gracefully), but knowledge gaps and the
   access and deletion logs are not saved until they exist.
 
+## Node version
+
+The project needs **Node 22 or newer** (the Supabase library uses Node's built-in WebSocket, which Node 20 lacks).
+`package.json`, `.nvmrc` and `.node-version` all say 22, and Railway reads them. In the deploy logs the first line
+of an error would show `Node.js v20…` if it picked the wrong one; if that ever happens, add the variable
+`NIXPACKS_NODE_VERSION=22` and redeploy.
+
 ## Steps
 
 1. Railway: **New Project, Deploy from GitHub repo**, choose `Dentrebair/realestate-vault`, and set the branch to

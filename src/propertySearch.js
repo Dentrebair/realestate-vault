@@ -1,31 +1,43 @@
 import { z } from 'zod';
-import { config, isSupabaseConfigured } from './config.js';
+import { config } from './config.js';
+import { recordEvent, stripNulls } from './leadMemory.js';
+import { findMatches } from './matching.js';
+import { toPropertyView } from './propertyView.js';
 
-export const propertySearchSchema = z
-  .object({
-    location: z.string().trim().min(1).optional(),
-    query: z.string().trim().min(1).optional(),
-    category: z.string().trim().min(1).optional(),
-    status: z.string().trim().min(1).optional(),
-    bedrooms: z.coerce.number().int().positive().optional(),
-    bathrooms: z.coerce.number().int().positive().optional(),
-    minBudget: z.coerce.number().nonnegative().optional(),
-    maxBudget: z.coerce.number().positive().optional(),
-    limit: z.coerce.number().int().min(1).max(25).default(10)
-  })
-  .refine(
-    (value) =>
-      value.minBudget === undefined ||
-      value.maxBudget === undefined ||
-      value.minBudget <= value.maxBudget,
-    {
-      message: 'minBudget must be less than or equal to maxBudget',
-      path: ['minBudget']
-    }
-  );
+// Explicit columns: never `select *`, so large columns (embeddings) are not pulled on every search.
+const COLUMNS = 'property_id,title,category,location,status,price_inr,metadata,raw_listing_text';
+const FETCH_LIMIT = 1000;
+
+const text = z.string().trim().min(1);
+
+const searchBase = z.object({
+  location: text.optional(),
+  query: text.optional(),
+  category: text.optional(),
+  status: text.optional(),
+  bedrooms: z.coerce.number().int().positive().optional(),
+  minBedrooms: z.coerce.number().int().positive().optional(),
+  bathrooms: z.coerce.number().int().positive().optional(),
+  minBudget: z.coerce.number().nonnegative().optional(),
+  maxBudget: z.coerce.number().positive().optional(),
+  readyToMove: z.boolean().optional(),
+  dealBreakers: z.array(text).max(30).optional(),
+  mustHaves: z.array(text).max(30).optional(),
+  customerId: text.optional(),
+  limit: z.coerce.number().int().min(1).max(25).default(5),
+  offset: z.coerce.number().int().min(0).default(0)
+});
+
+export const propertySearchSchema = z.preprocess(
+  stripNulls,
+  searchBase.refine(
+    (v) => v.minBudget === undefined || v.maxBudget === undefined || v.minBudget <= v.maxBudget,
+    { message: 'minBudget must be less than or equal to maxBudget', path: ['minBudget'] }
+  )
+);
 
 export async function searchProperties(supabase, filters) {
-  if (!isSupabaseConfigured || !supabase) {
+  if (!supabase) {
     return {
       configured: false,
       results: [],
@@ -33,97 +45,64 @@ export async function searchProperties(supabase, filters) {
     };
   }
 
-  let query = supabase
+  const { data, error } = await supabase
     .from(config.propertiesTable)
-    .select('*')
-    .limit(filters.limit);
-
-  if (config.orderColumn) {
-    query = query.order(config.orderColumn, { ascending: false, nullsFirst: false });
-  }
-
-  if (filters.location) {
-    query = addTextSearch(query, [filters.location]);
-  }
-
-  if (filters.query) {
-    query = addTextSearch(query, tokenize(filters.query));
-  }
-
-  if (filters.category) {
-    query = query.ilike('category', `%${filters.category}%`);
-  }
-
-  if (filters.status) {
-    query = query.ilike('status', `%${filters.status}%`);
-  }
-
-  if (filters.bedrooms) {
-    query = query.eq('metadata->>bedrooms', String(filters.bedrooms));
-  }
-
-  if (filters.bathrooms) {
-    query = query.eq('metadata->>bathrooms', String(filters.bathrooms));
-  }
-
-  if (filters.minBudget !== undefined) {
-    query = query.gte('price_inr', filters.minBudget);
-  }
-
-  if (filters.maxBudget !== undefined) {
-    query = query.lte('price_inr', filters.maxBudget);
-  }
-
-  const { data, error } = await query;
+    .select(COLUMNS)
+    .limit(FETCH_LIMIT);
 
   if (error) {
     error.statusCode = 502;
     throw error;
   }
 
-  return {
-    configured: true,
-    count: data.length,
-    results: data.map(toPropertyResult)
-  };
-}
+  const found = findMatches(data, filters);
+  const page = found.matches.slice(filters.offset, filters.offset + filters.limit);
+  const next = filters.offset + filters.limit;
 
-function toPropertyResult(row) {
-  const metadata = row.metadata ?? row.details ?? {};
-
-  return {
-    id: row.property_id ?? row.id,
-    title: row.title ?? metadata.title ?? null,
-    location: row.location ?? row.locality ?? metadata.location ?? null,
-    category: row.category ?? metadata.category ?? null,
-    bedrooms: row.bedrooms ?? metadata.bedrooms ?? null,
-    bathrooms: row.bathrooms ?? metadata.bathrooms ?? null,
-    price: row.price ?? row.price_inr ?? metadata.price ?? null,
-    availability: row.availability ?? row.status ?? metadata.availability ?? null,
-    configuration: row.configuration ?? metadata.configuration ?? metadata ?? null,
-    source: row.source ?? metadata.source ?? null
-  };
-}
-
-function addTextSearch(query, terms) {
-  for (const term of terms) {
-    const textFilters = config.searchColumns
-      .map((column) => `${column}.ilike.%${escapeFilter(term)}%`)
-      .join(',');
-    query = query.or(textFilters);
+  if (filters.customerId && found.outcome !== 'matches') {
+    await recordUnmetDemand(supabase, filters.customerId, found);
   }
 
-  return query;
+  return {
+    configured: true,
+    outcome: found.outcome,
+    guidance: found.guidance,
+    criteria: found.criteria,
+    count: page.length,
+    totalMatches: found.matches.length,
+    nextOffset: next < found.matches.length ? next : null,
+    results: page,
+    recommendations: found.recommendations,
+    unavailable: found.unavailable,
+    droppedOverBudget: found.droppedOverBudget,
+    excludedByDealBreaker: found.excludedByDealBreaker,
+    nearestElsewhere: found.nearestElsewhere,
+    suggestions: found.suggestions
+  };
 }
 
-function tokenize(value) {
-  return value
-    .split(/\s+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length >= 3)
-    .slice(0, 8);
+// Searches that found no exact match are the client's unmet demand. Never fail a search over it.
+async function recordUnmetDemand(supabase, customerId, found) {
+  try {
+    await recordEvent(supabase, customerId, 'zero_result', {
+      note: found.criteria.summary,
+      payload: { outcome: found.outcome, criteria: found.criteria }
+    });
+  } catch (error) {
+    console.error('Could not record zero_result event:', error.message);
+  }
 }
 
-function escapeFilter(value) {
-  return value.replaceAll(',', '\\,').replaceAll('%', '\\%');
+// One listing by id, for "tell me more about that one" and for re-checking a card that was tapped.
+export async function getProperty(supabase, propertyId) {
+  const { data, error } = await supabase
+    .from(config.propertiesTable)
+    .select(COLUMNS)
+    .eq('property_id', propertyId)
+    .maybeSingle();
+  if (error) {
+    error.statusCode = 502;
+    throw error;
+  }
+  return data ? { row: data, view: toPropertyView(data) } : null;
 }

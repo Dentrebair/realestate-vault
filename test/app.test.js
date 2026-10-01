@@ -58,12 +58,12 @@ test('search returns configuration guidance when Supabase env is absent', async 
   assert.deepEqual(response.body.results, []);
 });
 
-test('lead memory validates lead status', async () => {
+test('lead memory validates lead stage', async () => {
   const app = createApp({ supabase: null });
 
   const response = await request(app)
     .post('/tools/upsert-lead-memory')
-    .send({ customerId: 'whatsapp:+919999999999', leadStatus: 'maybe_later' })
+    .send({ customerId: 'whatsapp:+919999999999', leadStage: 'maybe_later' })
     .expect(400);
 
   assert.equal(response.body.error, 'invalid_request');
@@ -76,7 +76,6 @@ test('lead memory returns configuration guidance when Supabase env is absent', a
     .post('/tools/upsert-lead-memory')
     .send({
       customerId: 'whatsapp:+919999999999',
-      leadStatus: 'searching',
       preferredLocations: ['Anna Nagar'],
       keyPoints: [
         {

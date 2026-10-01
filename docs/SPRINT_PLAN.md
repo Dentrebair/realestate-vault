@@ -58,16 +58,16 @@ Everything else is Phase 2. The prototype runs on test leads only.
 
 ## Matching and recommendation rules
 
-A **Match** passes every stated requirement: category, area (through the micro-market alias table), budget, bedrooms, deal-breakers, and status available or under construction. Null-price listings pass a budget filter only as POR and are flagged "price unconfirmed".
+A **Match** passes every stated requirement: category and type (flat, villa, office, shop…), area (through the micro-market alias table), budget, bedrooms, deal-breakers, and status available or under construction. A listing with no price cannot be confirmed against a budget, so it is never a clean Match; it can appear as a Recommendation marked Price on Request.
 
-If there is no Match, the code relaxes one requirement at a time and returns up to three **Recommendations**, each with its differences:
+**Ranking is location first.** Candidates are sorted by distance from the requested area (same area, then near, at most 8 km, then far), and only then by how few other requirements they miss.
 
-1. Same category and area, budget up to 25% higher: "₹X Cr over your budget".
-2. Same category and area, bedrooms one more or fewer.
-3. Same category, neighbouring micro-market.
-4. Same area, other category.
+1. Never shown: sold and reserved listings, deal-breakers (for example under construction), a different category, a price more than 2× the budget, or more than 2 bedrooms off.
+2. Same area first, then near, then far.
+3. Within the same distance, fewest gaps first: related category, different type, budget (% over), bedrooms off or not listed, under construction.
+4. A **far** option is shown only if it would be a full Match except for its area. Otherwise the bot says nothing fits near the requested area and asks whether to widen the area or change the budget.
 
-Every Recommendation carries its own differences list (for example "2 bedrooms instead of 3", "₹1.8 Cr over budget", "under construction"), which appears on the card. Zero-result searches are also recorded as `lead_events` so the client can see unmet demand.
+When there is no Match the bot shows 1 to 3 Recommendations, each with its own differences list ("about 4 km from OMR", "₹1.8 Cr over your budget", "1 bedroom fewer", "under construction"). When there are none, the answer says which of three things is true: nothing in the area, properties in the area but above budget, or nothing fits. The response also lists sold or reserved properties that would have fitted, so the bot can say "that one is sold". Zero-result searches are recorded as `lead_events` so the client can see unmet demand.
 
 ---
 
@@ -84,48 +84,134 @@ Every Recommendation carries its own differences list (for example "2 bedrooms i
 
 ## Sprint P1: Matching engine and stages (all testable without Telegram)
 
-- [ ] Rename `lead_status` to `lead_stage` everywhere (code, OpenAPI, tool schemas) with the six stages.
-- [ ] Stage rules in one place: allowed moves, who may make them, each move written to `lead_events`.
-- [ ] Upsert becomes a true partial update (today it resets the status and wipes lists on every call).
-- [ ] `getLead`, `addToShortlist`, `removeFromShortlist`, `setStage`.
-- [ ] Search: default status filter; explicit columns instead of `*`; category normalisation to the seven real values (flat, apartment, villa → residential); `microMarkets.js` alias table (OMR covers Navalur, Sholinganallur, Perungudi, Thoraipakkam, Siruseri, Tidel Park, and so on; same for ECR, Anna Nagar, T. Nagar, Velachery); one OR across alias terms; `minBedrooms`.
-- [ ] Budget input as amount plus unit, and `formatInr` ("₹62 L", "₹4.8 Cr"). `priceDisplay` returns "Price on Request (POR)" for any null price.
-- [ ] Matching and Recommendation engine per the rules above, returning `matches[]` and `recommendations[]` with `differences[]`.
-- [ ] Tests with a fake Supabase client. A table-driven test runs the search-level cases from `test/fixtures/testLeads.js` (for example leads 011, 014, 016, 018, 019, 020, 040, 046) and checks which properties come back and which are excluded.
-- [ ] Live check on the seeded data.
+Status: built and verified on 2026-10-01, except the public-key check below. 57 tests pass.
 
-**Done when:** tests pass; the fixture cases return the expected matches and recommendations; sold and reserved listings never appear; a second upsert no longer changes the stage or wipes the shortlist.
+- [x] Rename `lead_status` to `lead_stage` everywhere (code, OpenAPI, tool schemas) with the six stages.
+- [x] Stage rules in one place ([src/stages.js](../src/stages.js)): allowed moves, who may make them, each move written to `lead_events`.
+- [x] Upsert is a true partial update. It never resets the stage or wipes lists; key points accumulate and shortlist ids only grow.
+- [x] `getLead`, `addToShortlist`, `removeFromShortlist`, `setStage` (a stage change loses to a newer write instead of overwriting it).
+- [x] Search: sold and reserved never returned; explicit columns instead of `*`; category and type words normalised (flat, villa, office, cloud kitchen…); [src/microMarkets.js](../src/microMarkets.js) with about 45 localities and approximate coordinates (OMR, ECR, GST Road, Tambaram, Anna Nagar, airport, Tidel Park…); `minBedrooms`; `offset` for Show more.
+- [x] Budget parsing (`1.5C`, `150L`, ranges, missing units, inverted ranges) and `formatInr`. `priceDisplay` returns "Price on Request (POR)" for any null price.
+- [x] Matching and Recommendation engine ([src/matching.js](../src/matching.js)): location first, at most 3 recommendations each with `differences[]`, one far option only when nothing is near, sold or reserved near-misses reported, unmet demand recorded as `zero_result` events.
+- [x] Tests with a fake Supabase client. A table-driven test runs 22 of the 50 test leads against a snapshot of the 20 live listings, plus stage, lead-store and money tests.
+- [x] Live check on the seeded data: fixture cases give the expected answers; a scratch lead kept its stage, shortlist and fields across a second upsert; the model could not create a hot lead.
+- [x] Old `sql/customer_leads.sql` removed.
+- [ ] Confirm the public (anon) Supabase key cannot read the three lead tables. Needs `SUPABASE_ANON_KEY` added to `.env` (Supabase dashboard, Settings, API).
+
+**Done when:** tests pass; the fixture cases return the expected matches and recommendations; sold and reserved listings never appear; a second upsert no longer changes the stage or wipes the shortlist. All met.
+
+**Known limits, for later:**
+- Matching runs in JavaScript over up to 1,000 listings fetched per search. Fine for 20, and worth rethinking above about 1,000.
+- Area centre points are approximate and the near threshold is 8 km straight-line. Tune both against real client feedback.
+- Only "under construction" is understood as a deal-breaker; other deal-breakers are stored but not applied to matching.
 
 ## Sprint P2: The Telegram bot
 
-- [ ] `grammy`; polling mode for local work, webhook on Railway with a secret header (401 otherwise); in-memory duplicate check; reply 200 fast and process in the background.
-- [ ] Private chats only; text and button taps only; one message at a time per chat.
-- [ ] `/start`: intro, category quick-pick buttons, one line saying listings are indicative. Creates the Lead at `initiated`.
-- [ ] AI layer (`ai` + `@ai-sdk/openai`, model from `OPENAI_MODEL`): `systemPrompt.js` and tools `search_properties`, `get_property`, `save_requirements`, `request_site_visit`. Results first, one question at a time, no legal or investment advice, yields "as stated by seller".
-- [ ] Lead hydration and the last 20 messages from `chat_messages`; a record of the properties last shown, so "tell me about the second one" works.
-- [ ] Cards: Match cards say "✅ Matches your requirements"; Recommendation cards say "💡 Close option" and list the differences. Buttons: 📅 Book Site Visit, ⭐ Shortlist (toggles), Show more.
-- [ ] Button taps run without the model: re-check the property is still available, update the stage, record the event.
-- [ ] Sales desk alert on site visit: Lead name, handle, budget, area, property.
-- [ ] Offer a "Share my number" button when a visit is requested.
-- [ ] Off-topic guard on the first message (one polite line, then silence; greetings count as on-topic; if the check fails, treat as on-topic). Per-lead limit of 20 messages per hour and 1,000 characters.
-- [ ] Output guard: amounts in the model's text must come from tool results or the Lead's own message.
-- [ ] 10-second model timeout with the PRD's fallback message.
-- [ ] Production safety: refuse to start in production without the bearer token; turn the WhatsApp tool routes off by default; remove open CORS; do not return upstream error text.
-- [ ] Deploy to Railway, register the webhook.
-- [ ] Tests with a mocked model; a first eval set of about 20 of the 50 test leads, asserting on tool calls and forbidden content, not on exact wording.
+Status: built and verified on 2026-10-01 on a laptop. Railway deploy moved to after P3. 92 tests pass; the eval set passes 49 to 50 of 50 leads per run (149 of 150 over three runs).
 
-**Done when (live):** scenes 1 to 3 and 6 of the demo work on the real bot; the Triplicane and "1.5C" cases call the search with the right arguments; a stored budget is reused later in the chat; no null-price listing ever shows a number.
+- [x] `grammy`; polling mode for local work, webhook on Railway with a constant-time secret check (401 otherwise); duplicate-update check; answers 200 at once and processes afterwards.
+- [x] Private chats only; text and button taps only; one message at a time per chat (taps on their own lane).
+- [x] `/start` with category quick-pick buttons and a one-line "indicative" notice; creates the Lead at `initiated`; records a campaign code from a deep link. Also `/help`, `/saved`, `/reset`.
+- [x] AI layer (`ai` v7 + `@ai-sdk/openai`, `gpt-5-mini`, reasoning effort minimal): `search_properties`, `get_property`, `save_requirements`, `request_site_visit`. Customer id is bound by code.
+- [x] Lead hydration, last 20 messages from `chat_messages`, and what was last shown, so "the second one" works.
+- [x] Cards built in code: Match cards, Close option cards with differences, Shortlist and Book Site Visit buttons, Show more.
+- [x] Button taps run without the model: re-check the property, update the stage, record the event, answer the callback.
+- [x] Sales desk alert on site visit, to `SALES_DESK_CHAT_ID` (your own Telegram account for the demo), marked sent on success.
+- [x] Share-my-number button after a visit request; only the customer's own number is accepted.
+- [x] Off-topic guard on a brand-new lead's first message (one polite line, then silence). Known leads are never silenced. Rate limit of 20 messages per hour and 1,000 characters.
+- [x] Output guards: every amount in a reply must come from a tool result, the customer's words or their saved budget; no em or en dashes; a sold or reserved match is always named; "searching" with no search triggers a retry that forces a tool call.
+- [x] Money is read by code (`150L`, `1.5C`, ranges, missing units) and handed to the model as a fact.
+- [x] Production safety: tool routes off by default in production; refuses to start in production without the bearer token; no open CORS; upstream error text hidden.
+- [x] Eval harness (`npm run eval`, see below).
+- [ ] Deploy to Railway and register the webhook. Moved to the very end, after Phase 2 work.
+- [ ] Known gap: the model timeout is 25 seconds, not the PRD's 10, because a tool turn cannot reliably finish in 10.
+
+**Done when (live):** scenes 1 to 3 and 6 of the demo work on the real bot. Met on a laptop; the live Telegram test of scenes 1 to 6 passed on 2026-10-01.
+
+**Evals.** `npm run eval` runs test leads through the real model on an in-memory copy of the inventory and checks behaviour, not wording: tool arguments, cards shown or hidden, stages, forbidden content (invented prices, discounts, photos, dashes, leaked ids). `--all` runs all 50, `--lead 011,014` chosen ones, `--tag near-miss` a group, `--verbose` prints conversations. Failures always print the conversation. It costs about 230,000 tokens (a few cents) per full run.
 
 ## Sprint P3: Lead board and demo polish
 
-- [ ] Read-only **lead board** at `/admin`, protected by `ADMIN_TOKEN`: six columns by stage, each card showing name, requirement summary, shortlist, last activity, and a detail view with the event timeline.
-- [ ] Stage change from the board (forward moves, `closed`, `not_interested`), recorded in `lead_events`.
-- [ ] Filter to show or hide test leads.
-- [ ] Full eval run across all 50 test leads; fix prompt problems in `systemPrompt.js` or a test, not by coaching in chat.
-- [ ] Demo script rehearsal with `--adopt` (chat as a chosen test lead); reset with `--clean` and reseed.
-- [ ] README: setup, environment variables, seed commands, how to run the demo.
+Status: built 2026-10-01. One step is waiting on you (creating the first staff account). 110 tests pass.
 
-**Done when:** scenes 1 to 7 work end to end, the board shows stage movements made in the chat within a few seconds, and the eval set passes.
+- [x] Lead board at `/admin/` ([src/admin/](../src/admin/)): six stage columns with counts, cards with requirement summary, saved count, number-shared flag, campaign source and last activity; refreshes every 5 seconds; test leads can be hidden.
+- [x] Real staff accounts: Supabase Auth email and password, checked by the server. Tokens live in HttpOnly, SameSite=Strict cookies and renew themselves; a `staff` allowlist table decides who may enter and whether they are an admin or a viewer; sign-ups can be switched off; repeated wrong passwords are throttled; login needs JSON, so a cross-site form cannot post it.
+- [x] Lead detail panel: requirements, noted facts, shortlist with property names and prices, history (who moved it and why), and the conversation where policy allows. Deep links: `/admin/#lead=<id>`.
+- [x] Stage change from the board (admins only): any stage, including corrections backwards, recorded as a board move with who made it and a reason.
+- [x] "Asked for, but not fully available": zero-result searches grouped by what was asked, most asked first.
+- [x] Conversation policy (`BOARD_SHOW_CONVERSATIONS`: `test`, `all` or `none`), default test leads only. To be decided for real customers before launch.
+- [x] Customer text is only ever shown as plain text (a test guards against `innerHTML` and similar).
+- [x] `npm run demo:reset`; `--adopt` now also clears the old conversation and history so a demo starts clean.
+- [x] README, demo script ([docs/DEMO.md](DEMO.md)), updated `.env.example`.
+- [x] Full eval run across all 50 leads: done in Sprint P2 (149 of 150 lead-runs passed).
+- [ ] **You:** run `sql/002_admin.sql`, create your account in Supabase Auth, run `npm run add-staff -- you@email.com admin`, then sign in and rehearse [docs/DEMO.md](DEMO.md). Until then the sign-in has only been tested against a stand-in for Supabase Auth, not the real one.
+- [ ] Rehearsal of scenes 4 to 7 on the bot running on your laptop (scenes 1 to 3 and the discount and visit steps were tried live earlier). The rehearsal on a deployed bot moves to the very end with the Railway deploy.
+
+**Done when:** scenes 1 to 7 work end to end and the board shows stage changes from the chat within a few seconds.
+
+**Choices worth knowing about**
+- The board is served by the same app as the bot, so one deploy covers both.
+- Phone numbers are shown only in a lead's detail panel, never on the cards.
+- The board shows stage history, not a live chat. Nothing on the board can send a message to a customer.
+
+---
+
+## Add-on: property photos
+
+Status: built 2026-10-01. Needs `sql/003_photos.sql` run, and photos uploaded by you.
+
+- [x] Storage: a public `property-photos` bucket and a `property_photos` table; the `properties` table is not altered.
+- [x] Admin panel **Listings** tab: search, thumbnails, photo manager with multi-upload, reorder and delete. Admins change, viewers look.
+- [x] Upload safety: admin-only, one raw image per request, type read from the file's bytes, 5 MB and 10-photo limits, generated file names, browser-side shrink to 1600 px that also strips phone location data, page allowed to load images only from Supabase Storage.
+- [x] Telegram cards: cover photo with the details as the caption, and a ◀ 2/5 ▶ row that swaps the photo in place. Text card if a listing has no photos, or if Telegram cannot fetch one. Shortlist and Saved keep the gallery row.
+- [x] Checked against the real Telegram API: photo send with formatting and buttons, in-place swap with the caption kept, long captions, and a bad URL refused cleanly. The upload flow was exercised in a real browser (upload, reorder, delete).
+- [ ] **You:** run `sql/003_photos.sql`, then upload photos for a few listings from the Listings tab.
+- Later: a Telegram Mini App gallery with true finger-swipe, once the bot is deployed (needs a public HTTPS address).
+
+---
+
+## Add-on: truthfulness
+
+Status: built 2026-10-01. Needs `sql/004_knowledge.sql` run. Triggered by the bot saying listings had images when none did.
+
+The goal is that every factual statement is true to its context: listing data, the customer's words, their saved profile, an approved answer, or a fixed policy line.
+
+Measured with two audits and the same judge before and after (gpt-5-mini):
+
+| | Before | After |
+|---|---|---|
+| 41 off-script questions fully grounded | 15 | 38 |
+| Unsupported claims in those replies | 37 | 5 |
+| 50 normal conversations fully grounded | 34 | 46 |
+| Behaviour evals | 50 of 50 | 50 of 50 |
+
+- [x] A question gateway answers from data before the model: photos, availability, stock counts, hours, identity, other cities, visit times, comparisons, and listing details (parking, floor, facing, size, possession, approvals, amenities, distances, and more). It never takes over a search request; a test checks all 50 test leads' own messages.
+- [x] "No match" replies are written by code; suggested areas come only from the inventory.
+- [x] Knowledge gaps and approved answers: stored with the customer's request as JSON, grouped in a Knowledge tab on the board, answered once by an admin and served from then on. Property, area and general scope.
+- [x] Filters on the model's text: offers of abilities we lack, general knowledge, and place names the data did not give.
+- [x] Closed-world prompt, owner-approved answers handed to the model as facts, and the pricing wording made neutral.
+- [x] Audit tools: `evals/grounding.js`, `--judge` on the evals.
+- Checked and rejected: temperature 0 and top_p (rejected by the model's API; no gain on a model that accepts them), and a keyword-based output validator (would have discarded 18 of 22 correct no-match replies).
+- [ ] **You:** run `sql/004_knowledge.sql`, then confirm the `TEAM_CONFIRM_LINE` wording is true for your team.
+- Later: a second, cheap verifier pass on a sample of live replies; owners can add areas to the place dictionary from the board.
+
+---
+
+## Phase 2, sprint 1: before real customers (privacy)
+
+Status: built 2026-10-01. Needs `sql/005_privacy.sql` run (and `sql/004_knowledge.sql` from the last add-on, which is still missing from the database).
+
+- [x] Consent at first contact with an **I agree** button. Before it, only the Telegram id is held; no name, username or messages, and nothing goes to the AI. Buttons and commands that use a profile wait for it. Customers who existed before get asked once.
+- [x] `/privacy`, `/mydata`, `/forget` (with confirmation). Erasure removes the lead, messages, history and unanswered questions and keeps only a one-way hash.
+- [x] Retention as settings: messages and idle real leads, test leads exempt, run every six hours and with `npm run retention`. Demo values in `.env`: 24 hours for both.
+- [x] Viewers cannot see phone numbers or conversations. Admins can, where the conversation policy allows, and every such view lands in an **Access log** (admin tab), once per staff member per lead per 30 minutes.
+- [x] Log lines never carry message text (a test checks the source).
+- [x] Agreeing works even before `sql/005_privacy.sql` is run.
+- [ ] **You:** run `sql/005_privacy.sql` and `sql/004_knowledge.sql`; set `BUSINESS_NAME` and `PRIVACY_CONTACT`; have a lawyer review the notice in `src/telegram/consent.js` and the retention periods before real customers.
+- [ ] Decide `BOARD_SHOW_CONVERSATIONS` for real customers (currently test leads only).
+- Not done: removing alerts already sent to the Sales desk chat when a customer asks to be forgotten (the notice says the team must do it).
+
+Remaining Phase 2: reliability (database inbox, alert retries), human handoff, growth ideas, and the Railway deploy last.
 
 ---
 

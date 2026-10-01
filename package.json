@@ -7,13 +7,21 @@
   "scripts": {
     "dev": "node --watch src/server.js",
     "start": "node src/server.js",
-    "test": "node --test"
+    "test": "node --test test/*.test.js",
+    "seed:test-leads": "node scripts/seed-test-leads.js",
+    "eval": "node evals/run.js",
+    "demo:reset": "node scripts/seed-test-leads.js --clean && node scripts/seed-test-leads.js",
+    "add-staff": "node scripts/add-staff.js",
+    "retention": "node scripts/run-retention.js"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^4.0.83",
     "@supabase/supabase-js": "^2.45.4",
+    "ai": "^7.0.124",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "grammy": "^1.46.0",
     "helmet": "^7.1.0",
     "zod": "^3.23.8"
   },

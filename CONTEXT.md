@@ -9,7 +9,7 @@ A prospective buyer together with the profile we have saved about them (requirem
 _Avoid_: Customer, buyer, client, user
 
 **Lead stage**:
-Where a Lead is in the sales pipeline, in order: `initiated`, `interested`, `negotiating`, `site_visit_ready`, `closed`. `not_interested` is the exit from any stage. A Lead never moves backwards except to `not_interested`.
+Where a Lead is in the sales pipeline, in order: `initiated`, `interested`, `negotiating`, `site_visit_ready`, `closed`. `not_interested` is the exit from any stage. A Lead never moves backwards except to `not_interested`, and except when the Sales desk corrects a stage by hand from the lead board. An opted-out Lead who asks for properties again returns to `interested`.
 _Avoid_: Lead status, funnel stage, pipeline status
 
 **Initiated**:
@@ -56,3 +56,15 @@ _Avoid_: Locality, neighbourhood, region
 **Test lead**:
 A made-up Lead used for testing and demos, marked `is_test` with an id starting `test:`. Never shown to the Sales desk as real.
 _Avoid_: Dummy, fake lead
+
+**Knowledge gap**:
+A question the assistant could not answer from data, saved with the customer's request so an owner can answer it. Closed when answered or dismissed.
+_Avoid_: Unanswered query, missing FAQ
+
+**Approved answer**:
+An answer an owner wrote for a Knowledge gap, for one Property, one area, or everyone. It is served the next time the question is asked.
+_Avoid_: FAQ entry, canned response
+
+**Consent**:
+A customer's agreement to the privacy notice, recorded with the date and the notice version. Without it the assistant keeps only their Telegram id.
+_Avoid_: Opt-in, terms acceptance

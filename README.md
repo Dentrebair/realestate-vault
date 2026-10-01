@@ -48,6 +48,7 @@ Run these in the Supabase SQL editor, in order:
 2. [sql/002_admin.sql](sql/002_admin.sql) creates the staff list for the board.
 3. [sql/003_photos.sql](sql/003_photos.sql) creates the photo table and the public `property-photos` storage bucket.
 4. [sql/004_knowledge.sql](sql/004_knowledge.sql) creates the tables for knowledge gaps and approved answers.
+5. [sql/005_privacy.sql](sql/005_privacy.sql) adds the consent version, the staff access log and the deletion log.
 
 The listings themselves live in a `properties` table that already exists in the project.
 
@@ -125,6 +126,26 @@ npm run eval -- --all --judge          # the 50 normal conversations, judged the
 ```
 
 The judge is a model too and is noisy, so read what it flags. Each new feature should add questions to these before it ships.
+
+## Privacy
+
+The privacy notice and the settings behind it are a **draft that a lawyer should review before real customers use the
+bot.** India's data protection law expects clear notice, consent, access and deletion; this implements those, but it is
+not legal advice.
+
+- **Consent first.** A new customer is asked to tap **I agree** before anything else. Until they do, the bot holds only their
+  Telegram id: no name, no username, no messages saved, nothing sent to the AI. A campaign code from a `/start` link is held
+  aside and stored only after they agree.
+- **Their commands.** `/privacy` shows the notice, `/mydata` lists exactly what is held, and `/forget` deletes the profile,
+  shortlist, messages, history and unanswered questions after a confirmation. A deletion leaves only a one-way hash as proof.
+- **Retention.** Messages are deleted after `CHAT_RETENTION_HOURS` (default 30 days) and real leads idle for
+  `LEAD_RETENTION_HOURS` (default 12 months). Test leads are never deleted. The server runs this every six hours;
+  `npm run retention` runs it now.
+- **Staff.** Viewers cannot see phone numbers or conversations. Admins can, where `BOARD_SHOW_CONVERSATIONS` allows, and each
+  time one does it is recorded in the board's **Access log** tab (once per staff member per lead per 30 minutes).
+- **Logs** never carry message text; a test checks this.
+- **Set `BUSINESS_NAME` and `PRIVACY_CONTACT`** so the notice names the business and says how to reach it.
+- Alerts already sent to the Sales desk chat are not removed by `/forget`; the notice says so, and the team must delete them.
 
 ## Test leads and the demo
 

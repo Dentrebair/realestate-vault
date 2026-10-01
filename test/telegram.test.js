@@ -60,7 +60,7 @@ function harness({ generate = async () => ({ text: 'ok' }), tables = {}, config 
     token: '123:test',
     botInfo: BOT_INFO,
     supabase,
-    config: { salesDeskChatId: SALES, businessHours: 'Mon to Sat, 10am to 7pm', agentTimeoutMs: 5000, ...config },
+    config: { salesDeskChatId: SALES, businessHours: 'Mon to Sat, 10am to 7pm', agentTimeoutMs: 5000, requireConsent: false, businessName: 'Acme Homes', privacyContact: 'privacy@acme.example', consentVersion: 'v-test', chatRetentionHours: 24, leadRetentionHours: 24 * 365, ...config },
     ai: { generate, model: {}, providerOptions: undefined }
   });
   bot.api.config.use(async (_previous, method, payload) => {

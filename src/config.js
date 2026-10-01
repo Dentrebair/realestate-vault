@@ -20,6 +20,14 @@ const configSchema = z.object({
   publicBaseUrl: z.string().url().optional(),
   salesDeskChatId: z.coerce.number().int().optional(),
   businessHours: z.string().min(1).default('Mon to Sat, 10am to 7pm IST'),
+  // Privacy. The notice names the business and says how to reach it; retention is how long data is kept.
+  businessName: z.string().min(1).default('our property team'),
+  privacyContact: z.string().min(1).optional(),
+  requireConsent: z.boolean(),
+  consentVersion: z.string().min(1).default('2026-10-draft-1'),
+  chatRetentionHours: z.coerce.number().positive().default(24 * 30),
+  leadRetentionHours: z.coerce.number().positive().default(24 * 365),
+
   // Said when the assistant does not have a detail. Only keep it if it is true for your team.
   teamConfirmLine: z.string().min(1).default('Our team can confirm it at a site visit.'),
 
@@ -58,6 +66,12 @@ export const config = configSchema.parse({
   salesDeskChatId: blank(process.env.SALES_DESK_CHAT_ID),
   businessHours: blank(process.env.BUSINESS_HOURS),
   teamConfirmLine: blank(process.env.TEAM_CONFIRM_LINE),
+  businessName: blank(process.env.BUSINESS_NAME),
+  privacyContact: blank(process.env.PRIVACY_CONTACT),
+  requireConsent: blank(process.env.REQUIRE_CONSENT) === undefined ? true : process.env.REQUIRE_CONSENT !== 'false',
+  consentVersion: blank(process.env.CONSENT_VERSION),
+  chatRetentionHours: blank(process.env.CHAT_RETENTION_HOURS),
+  leadRetentionHours: blank(process.env.LEAD_RETENTION_HOURS),
 
   openaiApiKey: blank(process.env.OPENAI_API_KEY),
   openaiModel: blank(process.env.OPENAI_MODEL),

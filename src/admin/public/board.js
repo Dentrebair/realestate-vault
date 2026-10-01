@@ -100,6 +100,7 @@
     $('login').hidden = true;
     $('app').hidden = false;
     $('who').textContent = `${state.me.email} (${state.me.role})`;
+    $('tab-audit').hidden = state.me.role !== 'admin';
     const linked = /^#lead=(.+)$/.exec(location.hash);
     if (linked) openDrawer(decodeURIComponent(linked[1]));
     setView(state.view);
@@ -199,7 +200,7 @@
     const rows = [
       ['Looking for', r.summary], ['Intent', r.intent], ['Timeline', r.urgency], ['Financing', r.financing],
       ['Must have', r.mustHaves.join(', ')], ['Will not accept', r.dealBreakers.join(', ')],
-      ['Last request', r.lastQuery], ['Next step', r.nextAction], ['Phone', lead.phone], ['Came from', lead.source]
+      ['Last request', r.lastQuery], ['Next step', r.nextAction], ['Phone', lead.phoneHidden ? 'Shared (visible to admins only)' : lead.phone], ['Came from', lead.source]
     ].filter(([, value]) => value);
 
     const stageSelect = el('select', { id: 'move-stage', 'aria-label': 'Move to stage' },
@@ -249,7 +250,7 @@
           ? (lead.conversation.length
               ? el('div', { class: 'chat' }, lead.conversation.map((m) => el('div', { class: `bubble ${m.role}`, text: m.content })))
               : el('p', { class: 'muted', text: 'No messages yet.' }))
-          : el('p', { class: 'muted', text: 'Conversations of real customers are hidden on this board.' }))
+          : el('p', { class: 'muted', text: state.me?.role === 'admin' ? 'Conversations of real customers are hidden on this board.' : 'Only admins can read conversations.' }))
     ].filter(Boolean));
   }
 
@@ -277,19 +278,22 @@
     $('leads-view').hidden = view !== 'leads';
     $('listings-view').hidden = view !== 'listings';
     $('knowledge-view').hidden = view !== 'knowledge';
-    $('tests-toggle').hidden = view === 'listings';
-    for (const name of ['leads', 'listings', 'knowledge']) {
+    $('audit-view').hidden = view !== 'audit';
+    $('tests-toggle').hidden = view === 'listings' || view === 'audit';
+    for (const name of ['leads', 'listings', 'knowledge', 'audit']) {
       $(`tab-${name}`).setAttribute('aria-current', view === name ? 'page' : 'false');
     }
     closeDrawer();
     if (view === 'leads') refresh();
     else if (view === 'listings') loadListings();
+    else if (view === 'audit') loadAudit();
     else loadKnowledge();
   }
 
   $('tab-leads').addEventListener('click', () => setView('leads'));
   $('tab-listings').addEventListener('click', () => setView('listings'));
   $('tab-knowledge').addEventListener('click', () => setView('knowledge'));
+  $('tab-audit').addEventListener('click', () => setView('audit'));
   $('listing-search').addEventListener('input', renderListings);
 
   async function loadListings() {
@@ -513,6 +517,23 @@
             try { await api(`/knowledge/entries/${e.id}`, { method: 'DELETE' }); loadKnowledge(); } catch (err) { notice(err.message, true); }
           } })));
     }) : [el('p', { class: 'muted', text: 'No approved answers yet.' })]));
+  }
+
+  // ---- access log (admins) -----------------------------------------------------------------------
+
+  async function loadAudit() {
+    try {
+      const { entries } = await api('/audit');
+      $('audit-list').replaceChildren(...(entries.length
+        ? entries.map((e) => el('article', { class: 'gap' },
+            el('div', { class: 'gap-head' },
+              el('span', { class: 'gap-title' }, e.staff, ' opened ', el('a', { href: `#lead=${encodeURIComponent(e.customerId)}`, text: e.customerId, onclick: () => { setView('leads'); setTimeout(() => openDrawer(e.customerId), 200); } })),
+              el('span', { class: 'muted', text: timeAgo(e.at) })),
+            el('p', { class: 'muted', text: [e.sawPhone && 'phone number', e.sawConversation && 'conversation'].filter(Boolean).join(' and ') + ' shown' })))
+        : [el('p', { class: 'muted', text: 'Nobody has opened a private detail yet.' })]));
+    } catch (e) {
+      if (e.message !== 'signed out') notice(`Could not load the access log: ${e.message}`, true);
+    }
   }
 
   // ---- first load ----------------------------------------------------------------------------

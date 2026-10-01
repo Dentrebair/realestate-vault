@@ -197,6 +197,24 @@ Measured with two audits and the same judge before and after (gpt-5-mini):
 
 ---
 
+## Phase 2, sprint 1: before real customers (privacy)
+
+Status: built 2026-10-01. Needs `sql/005_privacy.sql` run (and `sql/004_knowledge.sql` from the last add-on, which is still missing from the database).
+
+- [x] Consent at first contact with an **I agree** button. Before it, only the Telegram id is held; no name, username or messages, and nothing goes to the AI. Buttons and commands that use a profile wait for it. Customers who existed before get asked once.
+- [x] `/privacy`, `/mydata`, `/forget` (with confirmation). Erasure removes the lead, messages, history and unanswered questions and keeps only a one-way hash.
+- [x] Retention as settings: messages and idle real leads, test leads exempt, run every six hours and with `npm run retention`. Demo values in `.env`: 24 hours for both.
+- [x] Viewers cannot see phone numbers or conversations. Admins can, where the conversation policy allows, and every such view lands in an **Access log** (admin tab), once per staff member per lead per 30 minutes.
+- [x] Log lines never carry message text (a test checks the source).
+- [x] Agreeing works even before `sql/005_privacy.sql` is run.
+- [ ] **You:** run `sql/005_privacy.sql` and `sql/004_knowledge.sql`; set `BUSINESS_NAME` and `PRIVACY_CONTACT`; have a lawyer review the notice in `src/telegram/consent.js` and the retention periods before real customers.
+- [ ] Decide `BOARD_SHOW_CONVERSATIONS` for real customers (currently test leads only).
+- Not done: removing alerts already sent to the Sales desk chat when a customer asks to be forgotten (the notice says the team must do it).
+
+Remaining Phase 2: reliability (database inbox, alert retries), human handoff, growth ideas, and the Railway deploy last.
+
+---
+
 ## Test leads
 
 [test/fixtures/testLeads.js](../test/fixtures/testLeads.js) holds 50 leads written against the live inventory. Each has a saved profile, the messages that person would type, and what a good reply looks like.

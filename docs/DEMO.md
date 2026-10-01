@@ -36,6 +36,14 @@ flip through the photos in place; the counter shows 📷 2/4. The photo changes 
 4. Ask the same question again in Telegram, in different words if you like (`is there parking?`). It now gets that answer,
    and the board shows how many times it has been served.
 
+## Privacy (the first thing a new customer sees)
+
+1. From a Telegram account that has never used the bot (or after `/forget`), send `/start`. The bot asks for agreement
+   first, with an **I agree** button and a way to read the notice. Nothing is stored until it is tapped.
+2. Tap **I agree**, then send `/mydata` to see exactly what is held, and `/privacy` for the notice.
+3. Send `/forget` and confirm. Everything is deleted, and the next message starts from the agreement again.
+4. On the board, open **Access log** (admins) to see who has opened a customer's private details.
+
 ## Extras if there is time
 
 - Board: open the lead, read the history (who moved it and why), move a stage by hand.

@@ -1,5 +1,6 @@
 import { createApp } from './app.js';
 import { config, isSupabaseConfigured, isTelegramConfigured, telegramMode } from './config.js';
+import { startRetention } from './privacy.js';
 import { createSupabaseClient } from './supabase.js';
 import { ALLOWED_UPDATES, COMMANDS, createBot } from './telegram/bot.js';
 
@@ -24,6 +25,11 @@ if (isTelegramConfigured && isSupabaseConfigured && config.openaiApiKey) {
   bot = createBot({ token: config.telegramBotToken, supabase, config });
 } else if (isTelegramConfigured) {
   console.warn('Telegram is configured but Supabase or OPENAI_API_KEY is missing; the bot is not started.');
+}
+
+if (supabase) startRetention(supabase, config);
+if (config.nodeEnv === 'production' && isTelegramConfigured && (!process.env.BUSINESS_NAME || !process.env.PRIVACY_CONTACT)) {
+  console.warn('BUSINESS_NAME and PRIVACY_CONTACT are not set. The privacy notice will not name the business or say how to reach it.');
 }
 
 const app = createApp({ supabase, telegramBot: bot });

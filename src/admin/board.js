@@ -66,7 +66,7 @@ export function requirementSummary(row) {
 }
 
 // One lead in full. `showConversation` is the policy decision, made by the caller.
-export async function getLeadDetail(supabase, customerId, { showConversation }) {
+export async function getLeadDetail(supabase, customerId, { showConversation, role = 'admin' }) {
   const { data: lead, error } = await supabase
     .from('customer_leads')
     .select('*')
@@ -87,7 +87,8 @@ export async function getLeadDetail(supabase, customerId, { showConversation }) 
   const properties = await propertiesById(supabase, propertyIds);
 
   let conversation = null;
-  if (showConversation(lead)) {
+  // Only admins may read what a customer actually typed, and then only where the policy allows it.
+  if (role === 'admin' && showConversation(lead)) {
     const { data: messages, error: messagesError } = await supabase
       .from('chat_messages')
       .select('role,content,created_at')
@@ -102,7 +103,8 @@ export async function getLeadDetail(supabase, customerId, { showConversation }) 
     id: lead.customer_id,
     name: lead.display_name ?? 'Unknown',
     handle: lead.handle,
-    phone: lead.phone,
+    phone: role === 'admin' ? lead.phone : null,
+    phoneHidden: role !== 'admin' && Boolean(lead.phone),
     stage: lead.lead_stage,
     isTest: lead.is_test,
     source: lead.source,

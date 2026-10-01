@@ -16,11 +16,13 @@ const DEFAULTS = {
   }),
   lead_events: () => ({ payload: {} }),
   chat_messages: () => ({ meta: {} }),
+  audit_log: () => ({ detail: {} }),
+  deletion_log: () => ({ removed: {} }),
   knowledge_gaps: () => ({ status: 'open', times: 1, request: {}, is_test: false, entry_id: null }),
   knowledge_entries: () => ({ active: true, served_count: 0, keywords: [] })
 };
 
-const IDENTITY_TABLES = new Set(['property_photos', 'knowledge_gaps', 'knowledge_entries']);
+const IDENTITY_TABLES = new Set(['property_photos', 'knowledge_gaps', 'knowledge_entries', 'audit_log', 'deletion_log']);
 
 let clock = 0;
 let nextId = 1;
@@ -30,11 +32,13 @@ export function createFakeSupabase(seed = {}) {
   const tables = structuredClone(seed);
 
   function from(name) {
-    const state = { op: 'select', filters: [], patch: null, rows: null, limit: null, onConflict: null, returning: false, shape: null, orderBy: null };
+    const state = { op: 'select', filters: [], patch: null, rows: null, limit: null, onConflict: null, returning: false, shape: null, orderBy: null, wantCount: false, head: false };
 
     const api = {
-      select() {
+      select(_columns, options) {
         state.returning = true;
+        state.wantCount = Boolean(options?.count);
+        state.head = Boolean(options?.head);
         return api;
       },
       insert(rows) {
@@ -59,6 +63,14 @@ export function createFakeSupabase(seed = {}) {
       },
       eq(column, value) {
         state.filters.push((row) => row[column] === value);
+        return api;
+      },
+      lt(column, value) {
+        state.filters.push((row) => row[column] !== undefined && row[column] !== null && row[column] < value);
+        return api;
+      },
+      gt(column, value) {
+        state.filters.push((row) => row[column] !== undefined && row[column] !== null && row[column] > value);
         return api;
       },
       in(column, values) {
@@ -118,6 +130,13 @@ export function createFakeSupabase(seed = {}) {
       } else if (state.op === 'delete') {
         affected = matching();
         tables[name] = table.filter((row) => !affected.includes(row));
+        // Deleting a lead removes what hangs off it, as the foreign keys with "on delete cascade" do.
+        if (name === 'customer_leads') {
+          const gone = new Set(affected.map((r) => r.customer_id));
+          for (const child of ['chat_messages', 'lead_events']) {
+            if (tables[child]) tables[child] = tables[child].filter((r) => !gone.has(r.customer_id));
+          }
+        }
       }
 
       if (state.orderBy) {
@@ -125,10 +144,12 @@ export function createFakeSupabase(seed = {}) {
         affected = [...affected].sort((a, b) => (a[column] > b[column] ? 1 : a[column] < b[column] ? -1 : 0));
         if (!ascending) affected.reverse();
       }
+      const total = affected.length;
       if (state.limit !== null) affected = affected.slice(0, state.limit);
 
       const wantsRows = state.op === 'select' || state.returning;
-      const data = wantsRows ? structuredClone(affected) : null;
+      const data = wantsRows && !state.head ? structuredClone(affected) : null;
+      const count = state.wantCount ? total : null;
 
       if (state.shape === 'single') {
         return data?.length === 1
@@ -136,7 +157,7 @@ export function createFakeSupabase(seed = {}) {
           : { data: null, error: { message: `expected one row, got ${data?.length ?? 0}` } };
       }
       if (state.shape === 'maybe') return { data: data?.[0] ?? null, error: null };
-      return { data, error: null };
+      return { data, error: null, count };
     }
 
     return api;

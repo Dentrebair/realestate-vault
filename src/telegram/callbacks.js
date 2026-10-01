@@ -2,6 +2,7 @@
 import {
   addToShortlist,
   getLead,
+  recordConsent,
   recordEvent,
   removeFromShortlist,
   setBotState,
@@ -9,10 +10,12 @@ import {
 } from '../leadMemory.js';
 import { loadPhotos } from '../photos.js';
 import { getProperty, searchProperties } from '../propertySearch.js';
-import { cardKeyboard } from './cards.js';
-import { STALE_PROPERTY, SHARE_NUMBER_PROMPT, VISIT_ALREADY, visitRecorded } from './copy.js';
+import { eraseCustomer } from '../privacy.js';
+import { browseKeyboard, cardKeyboard } from './cards.js';
+import { CONSENT_NEEDED, FORGET_CANCELLED, FORGOTTEN, consentPrompt, needsConsent, privacyNotice } from './consent.js';
+import { STALE_PROPERTY, SHARE_NUMBER_PROMPT, VISIT_ALREADY, visitRecorded, welcome } from './copy.js';
 import { saveMessage } from './history.js';
-import { ensureLead } from './lead.js';
+import { customerIdOf, ensureLead } from './lead.js';
 import { rememberShown, sendSearchResult } from './present.js';
 import { notifySales, visitAlert } from './sales.js';
 import { Keyboard } from 'grammy';
@@ -20,13 +23,25 @@ import { Keyboard } from 'grammy';
 const SHOWABLE = ['available', 'under_construction'];
 
 export async function handleCallback(ctx, deps) {
-  const match = /^action:(visit|save|unsave|more|browse|ph|noop)(?::(.+))?$/.exec(ctx.callbackQuery.data ?? '');
+  const match = /^action:(visit|save|unsave|more|browse|ph|noop|consent|privacy|forget)(?::(.+))?$/.exec(ctx.callbackQuery.data ?? '');
   let answer = {};
 
   try {
     if (!match) return;
     const [, action, arg] = match;
-    const handlers = { visit, save, unsave, more, browse, ph: gallery, noop: async () => ({}) };
+
+    // Everything except agreeing, reading the notice and deleting data waits for consent.
+    if (!['consent', 'privacy', 'forget', 'noop'].includes(action)) {
+      const lead = await ensureLead(deps.supabase, ctx.from, { config: deps.config });
+      if (needsConsent(lead, deps.config)) {
+        const prompt = consentPrompt(deps.config);
+        await ctx.reply(prompt.text, { reply_markup: prompt.keyboard });
+        answer = { text: CONSENT_NEEDED, show_alert: true };
+        return;
+      }
+    }
+
+    const handlers = { visit, save, unsave, more, browse, ph: gallery, noop: async () => ({}), consent, privacy, forget };
     answer = (await handlers[action](ctx, deps, arg)) ?? {};
   } finally {
     // Always answer, or the button keeps spinning.
@@ -39,7 +54,7 @@ async function visit(ctx, deps, propertyId) {
   const found = await getProperty(supabase, propertyId);
   if (!found || !SHOWABLE.includes(found.row.status)) return { text: STALE_PROPERTY, show_alert: true };
 
-  const lead = await ensureLead(supabase, ctx.from);
+  const lead = await ensureLead(supabase, ctx.from, { config: deps.config });
   const customerId = lead.customerId;
 
   const { data: earlier, error } = await supabase
@@ -90,14 +105,14 @@ async function save(ctx, deps, propertyId) {
   const found = await getProperty(supabase, propertyId);
   if (!found || !SHOWABLE.includes(found.row.status)) return { text: STALE_PROPERTY, show_alert: true };
 
-  const lead = await ensureLead(supabase, ctx.from);
+  const lead = await ensureLead(supabase, ctx.from, { config: deps.config });
   await addToShortlist(supabase, lead.customerId, propertyId);
   await swapKeyboard(ctx, propertyId, true);
   return { text: 'Saved to your shortlist ⭐' };
 }
 
 async function unsave(ctx, deps, propertyId) {
-  const lead = await ensureLead(deps.supabase, ctx.from);
+  const lead = await ensureLead(deps.supabase, ctx.from, { config: deps.config });
   await removeFromShortlist(deps.supabase, lead.customerId, propertyId);
   await swapKeyboard(ctx, propertyId, false);
   return { text: 'Removed from your shortlist' };
@@ -105,7 +120,7 @@ async function unsave(ctx, deps, propertyId) {
 
 async function more(ctx, deps) {
   const { supabase, api } = deps;
-  const lead = await ensureLead(supabase, ctx.from);
+  const lead = await ensureLead(supabase, ctx.from, { config: deps.config });
   const last = lead.botState?.lastSearch;
   if (!last || last.nextOffset === null || last.nextOffset === undefined) return { text: 'That is everything I have.' };
 
@@ -126,7 +141,7 @@ async function more(ctx, deps) {
 // Quick-pick category buttons from /start.
 async function browse(ctx, deps, category) {
   const { supabase, api } = deps;
-  const lead = await ensureLead(supabase, ctx.from);
+  const lead = await ensureLead(supabase, ctx.from, { config: deps.config });
 
   const filters = { category, limit: 5, offset: 0 };
   const result = await searchProperties(supabase, { ...filters, customerId: lead.customerId });
@@ -160,7 +175,7 @@ async function gallery(ctx, deps, arg) {
   if (!photos.length || !message?.caption) return { text: 'No photos to show.' };
 
   const index = ((Number.isInteger(requested) ? requested : 0) % photos.length + photos.length) % photos.length;
-  const lead = await ensureLead(deps.supabase, ctx.from);
+  const lead = await ensureLead(deps.supabase, ctx.from, { config: deps.config });
   const saved = (lead.shortlistedPropertyIds ?? []).includes(propertyId);
 
   try {
@@ -186,3 +201,32 @@ async function swapKeyboard(ctx, propertyId, saved) {
   }
 }
 
+
+async function consent(ctx, deps) {
+  const lead = await ensureLead(deps.supabase, ctx.from, { config: deps.config });
+  if (lead.consentAt) return { text: 'You have already agreed.' };
+
+  await recordConsent(deps.supabase, lead.customerId, {
+    version: deps.config.consentVersion,
+    from: ctx.from,
+    source: lead.botState?.pendingSource
+  });
+  await setBotState(deps.supabase, lead.customerId, { scope: 'on_topic', pendingSource: null });
+  await ctx.reply(welcome(ctx.from.first_name), { reply_markup: browseKeyboard() });
+  return { text: 'Thank you' };
+}
+
+async function privacy(ctx, deps) {
+  await ctx.reply(privacyNotice(deps.config));
+  return {};
+}
+
+async function forget(ctx, deps, choice) {
+  if (choice !== 'yes') {
+    await ctx.reply(FORGET_CANCELLED);
+    return {};
+  }
+  await eraseCustomer(deps.supabase, customerIdOf(ctx.from), { reason: 'customer_request' });
+  await ctx.reply(FORGOTTEN);
+  return { text: 'Deleted' };
+}

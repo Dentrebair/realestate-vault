@@ -505,3 +505,51 @@ test('a gap can be dismissed, and approved answers can be edited, switched off a
   await agent.delete(`/admin/api/knowledge/entries/${entry.id}`).expect(404);
   assert.equal((await agent.get('/admin/api/knowledge/entries')).body.entries.length, 0);
 });
+
+// ---- what staff may see, and the access log ---------------------------------------------------
+
+test('viewers never see phone numbers or conversations; admins do, and the access is logged', async () => {
+  const { app, supabase } = build({ showConversations: 'all' });
+  const viewer = await signIn(app, 'viewer@x.com');
+  const seen = (await viewer.get('/admin/api/leads/telegram:1').expect(200)).body;
+  assert.equal(seen.phone, null);
+  assert.equal(seen.phoneHidden, true);
+  assert.equal(seen.conversationVisible, false);
+  assert.equal(seen.conversation, null);
+  assert.equal(JSON.stringify(seen).includes('+919800000000'), false);
+  assert.equal((supabase.tables.audit_log ?? []).length, 0, 'seeing nothing private leaves no entry');
+
+  const admin = await signIn(app);
+  const full = (await admin.get('/admin/api/leads/telegram:1').expect(200)).body;
+  assert.equal(full.phone, '+919800000000');
+  assert.equal(full.conversationVisible, true);
+  assert.equal(full.conversation.length, 2);
+
+  const [entry] = supabase.tables.audit_log;
+  assert.equal(entry.staff_email, 'admin@x.com');
+  assert.equal(entry.customer_id, 'telegram:1');
+  assert.deepEqual(entry.detail, { phone: true, conversation: true });
+});
+
+test('opening the same lead again, as the page does every few seconds, is one log entry', async () => {
+  const { app, supabase } = build({ showConversations: 'all' });
+  const admin = await signIn(app);
+  for (let i = 0; i < 5; i++) await admin.get('/admin/api/leads/telegram:1').expect(200);
+  await admin.get('/admin/api/leads/test:002').expect(200);
+  assert.deepEqual(supabase.tables.audit_log.map((e) => e.customer_id).sort(), ['telegram:1', 'test:002']);
+});
+
+test('the access log is for admins only, newest first', async () => {
+  const { app } = build({ showConversations: 'all' });
+  await request(app).get('/admin/api/audit').expect(401);
+  const viewer = await signIn(app, 'viewer@x.com');
+  await viewer.get('/admin/api/audit').expect(403);
+
+  const admin = await signIn(app);
+  await admin.get('/admin/api/leads/telegram:1');
+  await admin.get('/admin/api/leads/test:002');
+  const { entries } = (await admin.get('/admin/api/audit').expect(200)).body;
+  assert.equal(entries.length, 2);
+  assert.deepEqual(entries[0], { id: entries[0].id, staff: 'admin@x.com', action: 'view_lead', customerId: entries[0].customerId, sawPhone: entries[0].sawPhone, sawConversation: true, at: entries[0].at });
+  assert.deepEqual(entries.map((e) => e.customerId).sort(), ['telegram:1', 'test:002']);
+});

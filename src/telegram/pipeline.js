@@ -7,6 +7,7 @@ import { visitPrompt } from './cards.js';
 import { answerFromData } from './gateway.js';
 import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
+import { consentPrompt, needsConsent } from './consent.js';
 import { isNegotiation } from './intent.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { failureAlert, notifySales } from './sales.js';
@@ -22,7 +23,14 @@ export async function handleText(ctx, deps) {
   if (text.length > MAX_MESSAGE_CHARS) return ctx.reply(TOO_LONG);
   if (!deps.allow(customerId)) return ctx.reply(RATE_LIMITED);
 
-  const lead = await ensureLead(supabase, ctx.from);
+  const lead = await ensureLead(supabase, ctx.from, { config });
+
+  // Until they agree to the privacy notice, nothing they say is kept or sent to the AI.
+  if (needsConsent(lead, config)) {
+    const prompt = consentPrompt(config);
+    await ctx.reply(prompt.text, { reply_markup: prompt.keyboard });
+    return;
+  }
 
   // Only someone we know nothing about is checked. A lead who already has a profile is on topic.
   if (lead.botState?.scope !== 'on_topic' && lead.leadStage !== 'initiated') {

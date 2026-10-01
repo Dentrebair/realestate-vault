@@ -147,6 +147,29 @@ export async function setStage(supabase, customerId, to, { actor, reason, proper
   return { changed: true, from, to };
 }
 
+// The customer agreed to the privacy notice. Only now do we store their name and username.
+export async function recordConsent(supabase, customerId, { version, from, source }) {
+  const row = await fetchLeadRow(supabase, customerId);
+  if (!row) throw notFound(customerId);
+  const patch = {
+    consent_at: now(),
+    consent_version: version,
+    display_name: from?.first_name || row.display_name || null,
+    handle: from?.username || row.handle || null,
+    updated_at: now()
+  };
+  if (source) patch.source = source;
+  let { error } = await supabase.from('customer_leads').update(patch).eq('customer_id', customerId);
+  if (error && /consent_version/.test(error.message)) {
+    // The version column arrives with sql/005_privacy.sql. Agreeing must work before then.
+    const { consent_version: _skip, ...withoutVersion } = patch;
+    ({ error } = await supabase.from('customer_leads').update(withoutVersion).eq('customer_id', customerId));
+  }
+  if (error) throw upstream(error);
+  await recordEvent(supabase, customerId, 'consent_given', { note: version });
+  return getLead(supabase, customerId);
+}
+
 export async function addToShortlist(supabase, customerId, propertyId) {
   const row = await fetchLeadRow(supabase, customerId);
   if (!row) throw notFound(customerId);
@@ -299,6 +322,8 @@ function toLeadResponse(row) {
     lastQuerySummary: row.last_query_summary,
     nextAction: row.next_action,
     isTest: row.is_test,
+    consentAt: row.consent_at ?? null,
+    consentVersion: row.consent_version ?? null,
     botState: row.bot_state ?? {},
     updatedAt: row.updated_at
   };

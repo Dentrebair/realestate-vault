@@ -19,7 +19,7 @@ const bot = createBot({
   token: '123:local',
   botInfo: { id: 1, is_bot: true, first_name: 'Local', username: 'local', can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false },
   supabase,
-  config: { ...config, salesDeskChatId: 999 }
+  config: { ...config, salesDeskChatId: 999, requireConsent: false }
 });
 
 let n = 0;

@@ -2,7 +2,7 @@
 import { Bot } from 'grammy';
 import { createOpenAI } from '@ai-sdk/openai';
 import { handleCallback } from './callbacks.js';
-import { contact, help, reset, saved, start } from './commands.js';
+import { contact, forget, help, mydata, privacy, reset, saved, start } from './commands.js';
 import { HELP, NON_TEXT, RATE_LIMIT_PER_HOUR } from './copy.js';
 import { createDedupe, createQueue, createRateLimiter } from './guards.js';
 import { log } from './log.js';
@@ -15,6 +15,9 @@ export const COMMANDS = [
   { command: 'start', description: 'Start over and browse properties' },
   { command: 'saved', description: 'Your shortlisted properties' },
   { command: 'reset', description: 'Clear our conversation' },
+  { command: 'privacy', description: 'How your data is used' },
+  { command: 'mydata', description: 'What we hold about you' },
+  { command: 'forget', description: 'Delete your data' },
   { command: 'help', description: 'What I can do' }
 ];
 
@@ -47,6 +50,9 @@ export function createBot({ token, botInfo, supabase, config, ai }) {
 
   bot.command('start', (ctx) => start(ctx, deps));
   bot.command('help', help);
+  bot.command('privacy', (ctx) => privacy(ctx, deps));
+  bot.command('mydata', (ctx) => mydata(ctx, deps));
+  bot.command('forget', forget);
   bot.command('reset', (ctx) => reset(ctx, deps));
   bot.command('saved', (ctx) => saved(ctx, deps));
 

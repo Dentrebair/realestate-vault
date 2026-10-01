@@ -56,7 +56,7 @@ async function runLead(t) {
     token: '1:eval',
     botInfo: BOT_INFO,
     supabase,
-    config: { ...config, salesDeskChatId: SALES },
+    config: { ...config, salesDeskChatId: SALES, requireConsent: false },
     ai: {
       ...base,
       generate: async (options) => {

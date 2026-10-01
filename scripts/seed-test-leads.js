@@ -91,6 +91,8 @@ function build(properties) {
       last_query_summary: p.lastQuery ?? null,
       next_action: p.nextAction ?? null,
       is_test: true,
+      consent_at: new Date(now - 14 * day).toISOString(),
+      consent_version: 'seed',
       created_at: new Date(firstContact).toISOString(),
       last_contacted_at: new Date(now - (n % 5) * day).toISOString(),
       updated_at: new Date(now - (n % 5) * day).toISOString()
@@ -147,7 +149,7 @@ async function adopt(personaId, telegramId, properties) {
   // Keep the real person's name and handle; only the requirements and stage come from the persona.
   const { data: existing } = await supabase.from('customer_leads').select('display_name,handle').eq('customer_id', row.customer_id).maybeSingle();
   const keep = existing ? { display_name: existing.display_name ?? row.display_name, handle: existing.handle } : {};
-  await check(supabase.from('customer_leads').upsert({ ...row, ...keep, bot_state: {}, phone: null }, { onConflict: 'customer_id' }), 'adopt');
+  await check(supabase.from('customer_leads').upsert({ ...row, ...keep, bot_state: {}, phone: null, consent_at: new Date().toISOString(), consent_version: 'adopt' }, { onConflict: 'customer_id' }), 'adopt');
   console.log(`telegram:${telegramId} now has the profile of ${persona.name} (${persona.id}), stage ${persona.stage}.`);
   console.log(`Message to type: ${JSON.stringify(persona.messages)}`);
   console.log(`Expected: ${persona.expect}`);

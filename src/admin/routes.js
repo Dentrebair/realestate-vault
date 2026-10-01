@@ -3,6 +3,7 @@ import express from 'express';
 import { setStage } from '../leadMemory.js';
 import { STAGES } from '../stages.js';
 import { clearSessionCookies, createLoginLimiter, setSessionCookies, staffFromRequest } from './auth.js';
+import { listAccess, recordAccess } from './audit.js';
 import { getBoard, getDemand, getLeadDetail } from './board.js';
 import { mountKnowledgeRoutes } from './knowledgeRoutes.js';
 import { mountPhotoRoutes } from './photoRoutes.js';
@@ -88,10 +89,24 @@ export function createAdminRouter({ supabase, auth, showConversations = 'test', 
     }
   });
 
+  router.get('/api/audit', requireStaff('admin'), async (_request, response, next) => {
+    try {
+      response.json({ entries: await listAccess(supabase) });
+    } catch (error) {
+      next(error);
+    }
+  });
+
   router.get('/api/leads/:id', requireStaff(), async (request, response, next) => {
     try {
-      const detail = await getLeadDetail(supabase, request.params.id, { showConversation });
+      const detail = await getLeadDetail(supabase, request.params.id, { showConversation, role: request.staff.role });
       if (!detail) return response.status(404).json({ error: 'not_found' });
+      await recordAccess(supabase, {
+        staffEmail: request.staff.email,
+        customerId: detail.id,
+        phone: detail.phone,
+        conversation: detail.conversationVisible
+      }).catch((error) => console.error('Could not write the access log:', error.message));
       return response.json(detail);
     } catch (error) {
       return next(error);

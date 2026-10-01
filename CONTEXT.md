@@ -64,3 +64,7 @@ _Avoid_: Unanswered query, missing FAQ
 **Approved answer**:
 An answer an owner wrote for a Knowledge gap, for one Property, one area, or everyone. It is served the next time the question is asked.
 _Avoid_: FAQ entry, canned response
+
+**Consent**:
+A customer's agreement to the privacy notice, recorded with the date and the notice version. Without it the assistant keeps only their Telegram id.
+_Avoid_: Opt-in, terms acceptance

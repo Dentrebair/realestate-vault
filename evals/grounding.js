@@ -81,7 +81,7 @@ async function ask(q) {
   const facts = [];
   const base = modelFrom(config);
   const bot = createBot({
-    token: '1:eval', botInfo: BOT_INFO, supabase, config: { ...config, salesDeskChatId: 999 },
+    token: '1:eval', botInfo: BOT_INFO, supabase, config: { ...config, salesDeskChatId: 999, requireConsent: false },
     ai: { ...base, generate: async (options) => {
       const result = await generateText(options);
       for (const step of result.steps ?? []) for (const r of step.toolResults ?? []) facts.push(JSON.stringify(r.output ?? r.result ?? r));

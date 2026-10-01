@@ -27,6 +27,15 @@ In the board, open **Listings**, pick a property, and add three or four photos. 
 (for example `2BHK in OMR` for the Navalur flat). The card arrives as a photo with its details underneath. Tap **▶** to
 flip through the photos in place; the counter shows 📷 2/4. The photo changes but the details and buttons stay.
 
+## Knowledge gaps (the assistant never guesses)
+
+1. Show a few flats in Telegram, then ask `Does the first one have parking?` The assistant says the listing does not
+   mention it. It does not invent an answer.
+2. On the board, open **Knowledge**. The question is waiting there with the customer's request (expand "Request details").
+3. Type `Two covered car parks are included.` and **Save answer**.
+4. Ask the same question again in Telegram, in different words if you like (`is there parking?`). It now gets that answer,
+   and the board shows how many times it has been served.
+
 ## Extras if there is time
 
 - Board: open the lead, read the history (who moved it and why), move a stage by hand.

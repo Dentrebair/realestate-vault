@@ -18,7 +18,7 @@ import { properties } from '../test/fixtures/properties.js';
 import { testLeads } from '../test/fixtures/testLeads.js';
 import { createFakeSupabase } from '../test/helpers/fakeSupabase.js';
 import { CORE, checksFor } from './cases.js';
-import { judgeReply, naiveValidate } from './judge.js';
+import { contextFacts, judgeReply, naiveValidate } from './judge.js';
 
 const args = process.argv.slice(2);
 const flag = (name) => {
@@ -118,7 +118,7 @@ async function runLead(t) {
   result.facts = facts.join('\n');
   result.outcomes = facts.map((f) => { try { return JSON.parse(f).outcome; } catch { return null; } }).filter(Boolean);
   if (args.includes('--judge') && result.replies.length) {
-    result.judged = await judgeReply({ question: t.messages.join('\n'), reply: result.replies.join('\n'), facts: `${result.facts}\nBusiness hours: ${config.businessHours}` });
+    result.judged = await judgeReply({ question: t.messages.join('\n'), reply: result.replies.join('\n'), facts: `${result.facts}\nSAVED PROFILE: ${JSON.stringify(t.profile)}\n${contextFacts()}` });
   }
   return result;
 }

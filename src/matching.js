@@ -121,7 +121,8 @@ export function findMatches(rows, filters = {}) {
       .map((row) => annotate(row, criteria))
       .filter((a) => a.tier === 0 && a.categoryGap === 0)
       .map((a) => ({ id: a.row.property_id, title: a.row.title, location: a.row.location })),
-    nearestElsewhere: null
+    nearestElsewhere: null,
+    suggestions: { areasThatFit: [], cheapestInArea: null }
   };
 
   if (matches.length) {
@@ -132,6 +133,8 @@ export function findMatches(rows, filters = {}) {
     result.outcome = overBudget.length ? 'nothing_in_budget' : inArea.length ? 'nothing_fits' : 'nothing_in_area';
     result.nearestElsewhere = nearestElsewhere(annotated);
   }
+
+  if (!matches.length) result.suggestions = suggestionsFrom(annotated, inArea, criteria);
 
   result.guidance = guidanceFor(result);
   return result;
@@ -305,6 +308,29 @@ function unavailableNotes(rows, c) {
       location: a.row.location,
       status: a.row.status
     }));
+}
+
+// Where else the Lead could look, using only what is in stock: areas that have a property fitting everything
+// except the location, nearest first, and the cheapest property in the requested area.
+function suggestionsFrom(annotated, inArea, c) {
+  const byArea = new Map();
+  for (const a of annotated) {
+    if (a.tier === 0 || !fitsExceptArea(a)) continue;
+    const place = locateProperty(a.row.location ?? '');
+    const name = place.locality?.name ?? String(a.row.location ?? '').split(',')[0].trim();
+    if (!name) continue;
+    const entry = byArea.get(name) ?? { name, count: 0, km: a.km };
+    entry.count += 1;
+    if (a.km !== null && (entry.km === null || a.km < entry.km)) entry.km = a.km;
+    byArea.set(name, entry);
+  }
+  const areasThatFit = [...byArea.values()].sort((x, y) => (x.km ?? Infinity) - (y.km ?? Infinity)).slice(0, 3);
+
+  const priced = inArea.filter((a) => a.price !== null && a.categoryGap < 2 && !a.subtypeGap).sort(compareKnownPrice)[0];
+  const cheapestInArea = priced
+    ? { title: priced.row.title, location: priced.row.location, priceDisplay: formatInr(priced.price) }
+    : null;
+  return { areasThatFit, cheapestInArea };
 }
 
 function nearestElsewhere(annotated) {

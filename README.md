@@ -47,6 +47,7 @@ Run these in the Supabase SQL editor, in order:
 1. [sql/001_prototype_schema.sql](sql/001_prototype_schema.sql) creates the lead tables.
 2. [sql/002_admin.sql](sql/002_admin.sql) creates the staff list for the board.
 3. [sql/003_photos.sql](sql/003_photos.sql) creates the photo table and the public `property-photos` storage bucket.
+4. [sql/004_knowledge.sql](sql/004_knowledge.sql) creates the tables for knowledge gaps and approved answers.
 
 The listings themselves live in a `properties` table that already exists in the project.
 
@@ -92,6 +93,38 @@ then checks the file really is an image.
 In Telegram, a listing with photos is sent as its first photo with the property details as the caption. A second row of
 buttons, ◀ 2/5 ▶, swaps the picture in place, so the card works as a carousel. Listings without photos stay as text cards.
 If Telegram cannot fetch a photo, the card is sent as text instead. Photos are public links, because customers see them.
+
+## Staying truthful
+
+Every factual statement the assistant makes must trace to its context: the listing data, what the customer said, their
+saved profile, an answer an owner approved, or a fixed policy line. Anything else it must not state.
+
+How that is enforced, from strongest to weakest:
+
+1. **Code answers what code can know.** Availability, stock counts, business hours, listing details such as parking or
+   floor, comparisons, and "no match" replies are written from the database, not by the model. Suggested areas come from
+   the inventory.
+2. **Questions we cannot answer are saved, not guessed.** "Does it have parking?" for a listing that does not say, or
+   "is there a good school nearby?", gets a plain "I do not have that" and is saved as a **knowledge gap** with the
+   customer's request as JSON.
+3. **Owners fill the gaps.** The board's **Knowledge** tab lists open gaps, grouped by what was asked and how often. An
+   admin writes the answer once; it becomes an approved answer, and the next customer who asks gets it. An answer can be
+   for one property, for an area, or for everyone. Approved answers are also given to the model as facts.
+4. **Checks on what the model still writes** remove offers of things we cannot do ("I'll ask the seller", "I can send
+   the brochure"), general knowledge about areas, and place names that did not come from the data or the customer.
+5. **The model's prompt** lists what it knows, what it can do and what it cannot, and bans guessing.
+
+`TEAM_CONFIRM_LINE` is the sentence used when a detail is missing. Keep the default only if your team really can confirm
+details at a site visit.
+
+Measure it with the audits:
+
+```bash
+node evals/grounding.js                # 41 questions the assistant has no data for, judged by a second model
+npm run eval -- --all --judge          # the 50 normal conversations, judged the same way
+```
+
+The judge is a model too and is noisy, so read what it flags. Each new feature should add questions to these before it ships.
 
 ## Test leads and the demo
 

@@ -163,7 +163,8 @@ test('a search turn sends cards first, then the reply; saves requirements; moves
   assert.match(card.text, /₹62 L/);
   assert.equal(card.parse_mode, 'HTML');
   assert.deepEqual(buttons(card), ['action:visit:p04', 'action:save:p04']);
-  assert.equal(reply.text, 'There is no exact match, but this is the closest option.');
+  // Nothing matched exactly, so the reply is written by code from the search result, not by the model.
+  assert.equal(reply.text, 'I do not have an exact match for 3 bedroom residential in OMR up to ₹1.5 Cr. Here is the closest option, and each card says how it differs.');
 
   assert.ok(h.sent('sendChatAction').some((a) => a.action === 'typing'));
 
@@ -547,7 +548,7 @@ test('an unanswered search claim is retried with a tool forced on the first step
   assert.deepEqual(calls[1].prepareStep({ stepNumber: 0 }), { toolChoice: 'required' });
   assert.deepEqual(calls[1].prepareStep({ stepNumber: 1 }), {});
   assert.ok(h.toUser().some((m) => /How it differs|Matches your requirements/.test(m.text)), 'cards were sent');
-  assert.equal(h.toUser().at(-1).text, 'Here are the closest options.');
+  assert.match(h.toUser().at(-1).text, /^I do not have an exact match for 3 bedroom residential in Anna Nagar/);
 });
 
 test('a clarifying question may repeat the number the customer typed, with any unit', () => {

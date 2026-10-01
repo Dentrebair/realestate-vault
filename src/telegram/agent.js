@@ -7,6 +7,10 @@ import { loadPhotos } from '../photos.js';
 import { getProperty, searchProperties } from '../propertySearch.js';
 import { CATEGORIES } from '../propertyTypes.js';
 import { visitPrompt } from './cards.js';
+import { narrateSearch } from './narrate.js';
+import { recordGap, relevantEntries } from '../knowledge.js';
+import { locateProperty } from '../microMarkets.js';
+import { sentencesOf, truthful } from './truthguard.js';
 import { rememberShown, sendSearchResult } from './present.js';
 import { buildInstructions } from './systemPrompt.js';
 
@@ -28,7 +32,7 @@ export function createDeps(overrides = {}) {
 
 export async function runAgentTurn({ deps, supabase, api, chatId, lead, history, text }) {
   const customerId = lead.customerId;
-  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [], visitPromptSent: false };
+  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [], visitPromptSent: false, narration: null };
 
   const record = (output) => {
     state.toolOutputs.push(JSON.stringify(output));
@@ -141,7 +145,15 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     })
   };
 
-  const instructions = `${buildInstructions(lead)}${moneyHint(text)}`;
+  // Answers the owners have approved that bear on this question. They are facts the model may use.
+  const shownAreas = state.shown.map((p) => locateProperty(p.location ?? '').locality?.name).filter(Boolean);
+  const entries = await relevantEntries(supabase, {
+    text,
+    propertyIds: state.shown.map((p) => p.id),
+    areas: [...(lead.preferredLocations ?? []), ...shownAreas]
+  }).catch(() => []);
+
+  const instructions = `${buildInstructions(lead, entries)}${moneyHint(text)}`;
   const messages = [...history, { role: 'user', content: text }];
   const abortSignal = AbortSignal.timeout(deps.timeoutMs);
   const run = (extra = {}) =>
@@ -173,24 +185,88 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     });
   }
 
-  const guarded = guardAmounts(result.text ?? '', [text, JSON.stringify(leadBudgets(lead)), ...state.toolOutputs], text);
-  const reply = guarded.blocked
-    ? state.shown.length
-      ? 'Please see the details in the cards above.'
-      : 'Let me check the details with our team.'
-    : guarded.text || (state.shown.length ? 'Here is what I found.' : 'Could you tell me a little more about what you are looking for?');
+  // When nothing matched exactly, code writes the reply from the search result. The model is never asked to
+  // describe an empty or partial result, which is where it used to name areas from its own memory.
+  let reply;
+  let blocked = false;
+  if (state.narration) {
+    reply = state.narration;
+  } else {
+    const guarded = guardAmounts(result.text ?? '', [text, JSON.stringify(leadBudgets(lead)), ...state.toolOutputs], text);
+    blocked = guarded.blocked;
+    reply = guarded.blocked
+      ? ''
+      : mentionUnavailable(
+          withoutPhotoClaims(
+            withoutPhantomButtons(withoutCardTapping(withoutBackstage(guarded.text)), state.visitPromptSent),
+            state.shown.some((p) => p.photoCount > 0)
+          ),
+          state.unavailable
+        );
+    const before = reply;
+    reply = truthful(reply, allowedContext({ lead, history, text, state, entries }));
+    await noteGap({ supabase, lead, text, state, modelReply: before, finalReply: reply });
+  }
+
+  if (!reply) {
+    reply = blocked
+      ? state.shown.length ? 'Please see the details in the cards above.' : 'Let me check the details with our team.'
+      : state.shown.length ? 'Here is what I found.' : 'Could you tell me a little more about what you are looking for?';
+  }
 
   return {
-    text: withoutDashes(
-      mentionUnavailable(
-        withoutPhotoClaims(withoutPhantomButtons(withoutCardTapping(withoutBackstage(reply)), state.visitPromptSent), state.shown.some((p) => p.photoCount > 0)),
-        state.unavailable
-      )
-    ).slice(0, MAX_REPLY_CHARS),
-    blocked: guarded.blocked,
+    text: withoutDashes(reply).slice(0, MAX_REPLY_CHARS),
+    blocked,
     shown: state.shown,
     usage: result.usage
   };
+}
+
+// When the model had to say "I do not have that", or a check had to remove something it made up, that is a gap
+// an owner can fill. The customer's request is saved as JSON for the Knowledge tab.
+const NOT_KNOWN = /\b(i do not have|i don'?t have|does not mention|doesn'?t mention|not (listed|mentioned|in the listing)|cannot confirm|can'?t confirm|no information|not available in the listing)\b/i;
+
+async function noteGap({ supabase, lead, text, state, modelReply, finalReply }) {
+  const removed = sentencesOf(modelReply).filter((s) => !finalReply.includes(s));
+  const refused = NOT_KNOWN.test(finalReply);
+  if (!removed.length && !refused) return;
+  if (!isQuestionLike(text)) return;
+
+  const property = state.shown.length === 1 ? state.shown[0] : null;
+  try {
+    await recordGap(supabase, {
+      customerId: lead.customerId,
+      isTest: lead.isTest === true,
+      question: text,
+      kind: 'other',
+      propertyId: property?.id ?? null,
+      request: {
+        question: text,
+        why: refused ? 'the assistant said it did not have the answer' : 'a statement the data could not support was removed',
+        assistantReply: finalReply,
+        removed,
+        property: property ? { id: property.id, title: property.title, location: property.location } : null,
+        shown: state.shown.map((p) => ({ id: p.id, title: p.title })),
+        leadStage: lead.leadStage
+      }
+    });
+  } catch (error) {
+    console.error('Could not save a knowledge gap:', error.message);
+  }
+}
+
+const isQuestionLike = (text) => /\?|^\s*(is|are|does|do|can|could|will|would|what|which|how|when|where|who|tell me|any)\b/i.test(text);
+
+// Everything a reply may draw on: tool results, what the customer has said, their saved profile and what was shown.
+function allowedContext({ lead, history, text, state, entries = [] }) {
+  return [
+    ...state.toolOutputs,
+    ...entries.map((e) => `${e.answer} ${e.area ?? ''}`),
+    text,
+    ...history.filter((m) => m.role === 'user').map((m) => m.content),
+    JSON.stringify({ areas: lead.preferredLocations, categories: lead.propertyCategories }),
+    ...state.shown.map((p) => `${p.title} ${p.location}`)
+  ].join(' ');
 }
 
 // Notes about the assistant's own bookkeeping are not for the customer: "(Updating lead stage to negotiating...)".
@@ -281,6 +357,7 @@ async function searchTool({ input, supabase, api, chatId, lead, state }) {
   const views = await sendSearchResult({ api, supabase, chatId, result, lead });
   state.shown = rememberShown(views);
   state.unavailable = result.unavailable;
+  state.narration = narrateSearch(result);
 
   const { customerId: _omit, offset: _offset, limit: _limit, ...remembered } = filters;
   await setBotState(supabase, lead.customerId, {

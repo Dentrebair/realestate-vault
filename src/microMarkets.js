@@ -52,6 +52,36 @@ export const LOCALITIES = [
   loc('Kilpauk', 13.0836, 80.2427),
   loc('Meenambakkam', 12.9877, 80.1764),
 
+  // More of north, west and south Chennai. Used to recognise real place names and to place listings.
+  loc('Tiruvottiyur', 13.159, 80.3, { aliases: ['Thiruvottiyur'] }),
+  loc('Washermanpet', 13.107, 80.287),
+  loc('Perambur', 13.116, 80.24),
+  loc('Villivakkam', 13.108, 80.207),
+  loc('Kolathur', 13.123, 80.219),
+  loc('Madhavaram', 13.148, 80.23),
+  loc('Mogappair', 13.085, 80.17),
+  loc('Avadi', 13.114, 80.109),
+  loc('Thirumullaivoyal', 13.126, 80.13),
+  loc('Saidapet', 13.0213, 80.2231),
+  loc('Kodambakkam', 13.0521, 80.2255),
+  loc('Vadapalani', 13.05, 80.2121),
+  loc('Ashok Nagar', 13.0373, 80.2123),
+  loc('K.K. Nagar', 13.0415, 80.199, { aliases: ['KK Nagar'] }),
+  loc('Valasaravakkam', 13.042, 80.174),
+  loc('Virugambakkam', 13.056, 80.19),
+  loc('Manapakkam', 13.02, 80.17),
+  loc('Ramapuram', 13.031, 80.179),
+  loc('Alandur', 13.003, 80.201),
+  loc('Royapettah', 13.054, 80.263),
+  loc('Chetpet', 13.072, 80.241),
+  loc('Madipakkam', 12.964, 80.198),
+  loc('Nanganallur', 12.981, 80.189),
+  loc('Palavakkam', 12.95, 80.257, { corridors: ['ECR'] }),
+  loc('Kovalam', 12.79, 80.253, { corridors: ['ECR'], aliases: ['Covelong'] }),
+  loc('Padur', 12.82, 80.225, { corridors: ['OMR'] }),
+  loc('Vandalur', 12.892, 80.081, { corridors: ['GST Road'] }),
+  loc('Pammal', 12.969, 80.133),
+
   // North and west Chennai
   loc('Anna Nagar', 13.085, 80.2101),
   loc('Anna Nagar West', 13.0878, 80.1996),
@@ -208,4 +238,9 @@ export function textDistance(areaText, locationText) {
   const wanted = normalize(areaText);
   if (wanted && containsWord(normalize(locationText), wanted)) return { tier: 0, km: 0 };
   return { tier: 2, km: null };
+}
+
+// Every place name and alias we know, normalised. Used to spot a place the bot mentions that the data never gave it.
+export function knownPlaceNames() {
+  return [...entries.keys()].filter((key) => key.length > 2);
 }

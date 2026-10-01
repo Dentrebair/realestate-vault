@@ -76,7 +76,8 @@ export async function searchProperties(supabase, filters) {
     unavailable: found.unavailable,
     droppedOverBudget: found.droppedOverBudget,
     excludedByDealBreaker: found.excludedByDealBreaker,
-    nearestElsewhere: found.nearestElsewhere
+    nearestElsewhere: found.nearestElsewhere,
+    suggestions: found.suggestions
   };
 }
 

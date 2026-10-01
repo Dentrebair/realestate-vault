@@ -56,3 +56,11 @@ _Avoid_: Locality, neighbourhood, region
 **Test lead**:
 A made-up Lead used for testing and demos, marked `is_test` with an id starting `test:`. Never shown to the Sales desk as real.
 _Avoid_: Dummy, fake lead
+
+**Knowledge gap**:
+A question the assistant could not answer from data, saved with the customer's request so an owner can answer it. Closed when answered or dismissed.
+_Avoid_: Unanswered query, missing FAQ
+
+**Approved answer**:
+An answer an owner wrote for a Knowledge gap, for one Property, one area, or everyone. It is served the next time the question is asked.
+_Avoid_: FAQ entry, canned response

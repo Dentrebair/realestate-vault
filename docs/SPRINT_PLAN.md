@@ -170,6 +170,33 @@ Status: built 2026-10-01. Needs `sql/003_photos.sql` run, and photos uploaded by
 
 ---
 
+## Add-on: truthfulness
+
+Status: built 2026-10-01. Needs `sql/004_knowledge.sql` run. Triggered by the bot saying listings had images when none did.
+
+The goal is that every factual statement is true to its context: listing data, the customer's words, their saved profile, an approved answer, or a fixed policy line.
+
+Measured with two audits and the same judge before and after (gpt-5-mini):
+
+| | Before | After |
+|---|---|---|
+| 41 off-script questions fully grounded | 15 | 38 |
+| Unsupported claims in those replies | 37 | 5 |
+| 50 normal conversations fully grounded | 34 | 46 |
+| Behaviour evals | 50 of 50 | 50 of 50 |
+
+- [x] A question gateway answers from data before the model: photos, availability, stock counts, hours, identity, other cities, visit times, comparisons, and listing details (parking, floor, facing, size, possession, approvals, amenities, distances, and more). It never takes over a search request; a test checks all 50 test leads' own messages.
+- [x] "No match" replies are written by code; suggested areas come only from the inventory.
+- [x] Knowledge gaps and approved answers: stored with the customer's request as JSON, grouped in a Knowledge tab on the board, answered once by an admin and served from then on. Property, area and general scope.
+- [x] Filters on the model's text: offers of abilities we lack, general knowledge, and place names the data did not give.
+- [x] Closed-world prompt, owner-approved answers handed to the model as facts, and the pricing wording made neutral.
+- [x] Audit tools: `evals/grounding.js`, `--judge` on the evals.
+- Checked and rejected: temperature 0 and top_p (rejected by the model's API; no gain on a model that accepts them), and a keyword-based output validator (would have discarded 18 of 22 correct no-match replies).
+- [ ] **You:** run `sql/004_knowledge.sql`, then confirm the `TEAM_CONFIRM_LINE` wording is true for your team.
+- Later: a second, cheap verifier pass on a sample of live replies; owners can add areas to the place dictionary from the board.
+
+---
+
 ## Test leads
 
 [test/fixtures/testLeads.js](../test/fixtures/testLeads.js) holds 50 leads written against the live inventory. Each has a saved profile, the messages that person would type, and what a good reply looks like.

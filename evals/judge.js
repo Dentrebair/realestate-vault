@@ -3,6 +3,7 @@
 import { generateText } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { config } from '../src/config.js';
+import { properties } from '../test/fixtures/properties.js';
 
 const judgeModel = () => createOpenAI({ apiKey: config.openaiApiKey })('gpt-5-mini');
 
@@ -13,6 +14,16 @@ const CAPABILITIES =
   'The assistant CANNOT: send brochures, floor plans or videos; call, email or message anyone; contact sellers or builders; check availability with a seller; ' +
   'calculate EMIs or give financial advice; give area guides, neighbourhood descriptions, market data or price forecasts; filter by facts the listings do not carry; ' +
   'promise anything about price or timing.';
+
+// Everything the assistant's code can see besides what the model was handed: the listings, and our fixed policy.
+export function contextFacts() {
+  const listings = properties.map((p) => ({ id: p.property_id, title: p.title, category: p.category, location: p.location, status: p.status, price_inr: p.price_inr, metadata: p.metadata }));
+  return (
+    `LISTING DATA (the full inventory):\n${JSON.stringify(listings)}\n` +
+    `FIXED POLICY: we only sell property in Chennai; pricing, discounts, loans and legal questions are for the sales team or a professional; ` +
+    `site visits are requested with a button and the team confirms a time (${config.businessHours}); photos appear on a card with arrow buttons when a listing has them.`
+  );
+}
 
 // type: fact (a detail about a property or price not in FACTS), knowledge (general world knowledge about an area, market or law),
 //       ability (offers or claims something outside the CAN list), inventory (a claim about how much stock exists that FACTS do not support)
@@ -27,7 +38,7 @@ export async function judgeReply({ question, reply, facts }) {
       'Do NOT list: polite filler; questions the assistant asks; honest "I do not know" or "I cannot" statements that match the CANNOT list; handing pricing, loans or legal questions to the sales team; ' +
       'offering a site visit; describing the cards it just sent; repeating what the customer said.\n' +
       'Answer with JSON only: {"verdict":"grounded"|"ungrounded","unsupported":[{"type":"fact|knowledge|ability|inventory","claim":"short quote"}]}',
-    prompt: `FACTS:\n${facts.slice(0, 7000)}\n\nCUSTOMER MESSAGES:\n${question}\n\nREPLY:\n${reply}`
+    prompt: `FACTS:\n${facts.slice(0, 9000)}\n\nCUSTOMER MESSAGES:\n${question}\n\nREPLY:\n${reply}`
   });
   try {
     const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1));

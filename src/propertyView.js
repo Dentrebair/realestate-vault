@@ -47,6 +47,8 @@ const HIGHLIGHTS = {
 
 const MAX_HIGHLIGHTS = 6;
 
+export const SELLER_STATED_FIELDS = SELLER_STATED;
+
 export function toPropertyView(row, { kind = 'match', differences = [], distanceKm = null } = {}) {
   const meta = row.metadata ?? {};
   const price = row.price_inr === null || row.price_inr === undefined ? null : Number(row.price_inr);
@@ -83,12 +85,12 @@ function highlightsFor(category, meta) {
   return out;
 }
 
-function humanize(key) {
+export function humanize(key) {
   const words = key.replace(/_(sqft|ft|meters|percentage|lakhs|kva|acres|cents)$/, '').replace(/_/g, ' ');
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 
-function formatValue(key, value) {
+export function formatValue(key, value) {
   if (typeof value === 'boolean') return value ? 'Yes' : 'No';
   if (Array.isArray(value)) return value.join(', ');
   if (typeof value === 'number') {

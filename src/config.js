@@ -20,6 +20,8 @@ const configSchema = z.object({
   publicBaseUrl: z.string().url().optional(),
   salesDeskChatId: z.coerce.number().int().optional(),
   businessHours: z.string().min(1).default('Mon to Sat, 10am to 7pm IST'),
+  // Said when the assistant does not have a detail. Only keep it if it is true for your team.
+  teamConfirmLine: z.string().min(1).default('Our team can confirm it at a site visit.'),
 
   // AI
   openaiApiKey: z.string().min(1).optional(),
@@ -55,6 +57,7 @@ export const config = configSchema.parse({
   publicBaseUrl: blank(process.env.PUBLIC_BASE_URL) ?? (publicDomain ? `https://${publicDomain}` : undefined),
   salesDeskChatId: blank(process.env.SALES_DESK_CHAT_ID),
   businessHours: blank(process.env.BUSINESS_HOURS),
+  teamConfirmLine: blank(process.env.TEAM_CONFIRM_LINE),
 
   openaiApiKey: blank(process.env.OPENAI_API_KEY),
   openaiModel: blank(process.env.OPENAI_MODEL),

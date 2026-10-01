@@ -1,11 +1,13 @@
 // A text message from a Lead: guards, memory, the model, and the reply.
 import { setBotState, setStage } from '../leadMemory.js';
 import { runAgentTurn } from './agent.js';
-import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, PHOTOS_GENERAL, RATE_LIMITED, TOO_LONG, photosAnswer } from './copy.js';
-import { loadPhotos } from '../photos.js';
+import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, RATE_LIMITED, TOO_LONG } from './copy.js';
+import { getProperty } from '../propertySearch.js';
+import { visitPrompt } from './cards.js';
+import { answerFromData } from './gateway.js';
 import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
-import { asksAboutPhotos, isNegotiation } from './intent.js';
+import { isNegotiation } from './intent.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { failureAlert, notifySales } from './sales.js';
 import { scopeOf } from './scope.js';
@@ -49,17 +51,26 @@ export async function handleText(ctx, deps) {
     }).catch((error) => log('stage_failed', { customerId, error: error.message }, 'error'));
   }
 
-  // "Do you have images?" is a question about data, so code answers it from the data.
-  if (asksAboutPhotos(text)) {
-    const shown = lead.botState?.shown ?? [];
-    const found = shown.length ? await loadPhotos(supabase, shown.map((p) => p.id)).catch(() => new Map()) : new Map();
-    const answer = shown.length
-      ? photosAnswer(shown.map((p) => ({ title: p.title, count: found.get(p.id)?.length ?? 0 })))
-      : PHOTOS_GENERAL;
-    await saveMessage(supabase, customerId, 'user', text);
-    await ctx.reply(answer);
-    await saveMessage(supabase, customerId, 'assistant', answer);
-    return;
+  // Factual questions are answered from data, before the model is asked anything. If we cannot answer,
+  // the question is saved as a knowledge gap for the business owners to fill in.
+  try {
+    const answered = await answerFromData({ text, lead, supabase, config });
+    if (answered) {
+      await saveMessage(supabase, customerId, 'user', text);
+      await ctx.reply(answered.reply);
+      await saveMessage(supabase, customerId, 'assistant', answered.reply);
+      if (answered.visitFor) {
+        const found = await getProperty(supabase, answered.visitFor);
+        if (found) {
+          const prompt = visitPrompt(found.view);
+          await api.sendMessage(chatId, prompt.text, { parse_mode: 'HTML', reply_markup: prompt.keyboard });
+        }
+      }
+      log('answered_from_data', { customerId, gap: Boolean(answered.gapId), served: Boolean(answered.servedEntryId) });
+      return;
+    }
+  } catch (error) {
+    log('gateway_failed', { customerId, error: error.message }, 'error');
   }
 
   const stopTyping = keepTyping(api, chatId);

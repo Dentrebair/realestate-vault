@@ -15,8 +15,12 @@ const DEFAULTS = {
     is_test: false
   }),
   lead_events: () => ({ payload: {} }),
-  chat_messages: () => ({ meta: {} })
+  chat_messages: () => ({ meta: {} }),
+  knowledge_gaps: () => ({ status: 'open', times: 1, request: {}, is_test: false, entry_id: null }),
+  knowledge_entries: () => ({ active: true, served_count: 0, keywords: [] })
 };
+
+const IDENTITY_TABLES = new Set(['property_photos', 'knowledge_gaps', 'knowledge_entries']);
 
 let clock = 0;
 let nextId = 1;
@@ -91,7 +95,7 @@ export function createFakeSupabase(seed = {}) {
         affected = matching();
       } else if (state.op === 'insert') {
         for (const row of state.rows) {
-          const full = { ...(DEFAULTS[name]?.() ?? {}), created_at: stamp(), ...(name === 'property_photos' ? { id: nextId++ } : {}), ...structuredClone(row) };
+          const full = { ...(DEFAULTS[name]?.() ?? {}), created_at: stamp(), ...(IDENTITY_TABLES.has(name) ? { id: nextId++ } : {}), ...structuredClone(row) };
           table.push(full);
           affected.push(full);
         }

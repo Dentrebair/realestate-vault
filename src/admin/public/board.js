@@ -91,7 +91,7 @@
 
   $('show-tests').addEventListener('change', (event) => {
     state.showTests = event.target.checked;
-    refresh();
+    if (state.view === 'knowledge') loadKnowledge(); else refresh();
   });
 
   // ---- board ---------------------------------------------------------------------------------
@@ -103,8 +103,9 @@
     const linked = /^#lead=(.+)$/.exec(location.hash);
     if (linked) openDrawer(decodeURIComponent(linked[1]));
     setView(state.view);
+    refreshGapCount();
     clearInterval(state.timer);
-    state.timer = setInterval(() => { if (!document.hidden) refresh(); }, REFRESH_MS);
+    state.timer = setInterval(() => { if (!document.hidden) { refresh(); if (state.view !== 'knowledge') refreshGapCount(); } }, REFRESH_MS);
   }
 
   async function refresh() {
@@ -275,15 +276,20 @@
     state.view = view;
     $('leads-view').hidden = view !== 'leads';
     $('listings-view').hidden = view !== 'listings';
-    $('tests-toggle').hidden = view !== 'leads';
-    $('tab-leads').setAttribute('aria-current', view === 'leads' ? 'page' : 'false');
-    $('tab-listings').setAttribute('aria-current', view === 'listings' ? 'page' : 'false');
+    $('knowledge-view').hidden = view !== 'knowledge';
+    $('tests-toggle').hidden = view === 'listings';
+    for (const name of ['leads', 'listings', 'knowledge']) {
+      $(`tab-${name}`).setAttribute('aria-current', view === name ? 'page' : 'false');
+    }
     closeDrawer();
-    if (view === 'leads') refresh(); else loadListings();
+    if (view === 'leads') refresh();
+    else if (view === 'listings') loadListings();
+    else loadKnowledge();
   }
 
   $('tab-leads').addEventListener('click', () => setView('leads'));
   $('tab-listings').addEventListener('click', () => setView('listings'));
+  $('tab-knowledge').addEventListener('click', () => setView('knowledge'));
   $('listing-search').addEventListener('input', renderListings);
 
   async function loadListings() {
@@ -411,6 +417,102 @@
                   el('button', { type: 'button', 'aria-label': 'Move later', disabled: index === photos.length - 1, onclick: () => reorder(index, index + 1), text: '▶' })))))
           : el('p', { class: 'muted', text: 'No photos yet.' }))
     ].filter(Boolean));
+  }
+
+  // ---- knowledge: what we could not answer, and the answers owners approve -----------------------------
+
+  const KIND_LABELS = { listing_detail: 'About a property', area_info: 'About an area', policy: 'About what we can do', other: 'Other question' };
+
+  async function loadKnowledge() {
+    try {
+      const tests = state.showTests ? '1' : '0';
+      const [gaps, entries] = await Promise.all([api(`/knowledge/gaps?status=open&tests=${tests}`), api('/knowledge/entries')]);
+      renderGaps(gaps.gaps);
+      renderEntries(entries.entries);
+      setGapCount(gaps.gaps.length);
+    } catch (e) {
+      if (e.message !== 'signed out') notice(`Could not load knowledge: ${e.message}`, true);
+    }
+  }
+
+  async function refreshGapCount() {
+    try { setGapCount((await api(`/knowledge/gaps?status=open&tests=${state.showTests ? '1' : '0'}`)).gaps.length); } catch { /* the badge is optional */ }
+  }
+
+  function setGapCount(n) {
+    $('gap-count').textContent = String(n);
+    $('gap-count').hidden = n === 0;
+  }
+
+  function scopeText(g) {
+    if (g.propertyId) return `Used for this property only: ${g.propertyTitle ?? g.propertyId}`;
+    if (g.area) return `Used for any question about ${g.area}`;
+    return 'Used for every customer who asks this';
+  }
+
+  function renderGaps(gaps) {
+    const isAdmin = state.me?.role === 'admin';
+    $('gap-list').replaceChildren(...(gaps.length ? gaps.map((g) => {
+      const answer = el('textarea', { maxlength: '1000', placeholder: 'Write the answer customers should get', 'aria-label': 'Answer' });
+      const save = el('button', { type: 'button', class: 'primary', text: 'Save answer', onclick: async () => {
+        if (!answer.value.trim()) { notice('Write an answer first.', true); return; }
+        save.disabled = true;
+        try {
+          await api(`/knowledge/gaps/${g.id}/answer`, { method: 'POST', body: JSON.stringify({ answer: answer.value }) });
+          notice('Saved. The next customer who asks gets this answer.');
+          loadKnowledge();
+        } catch (e) { notice(e.message, true); save.disabled = false; }
+      } });
+      const dismiss = el('button', { type: 'button', text: 'Dismiss', onclick: async () => {
+        if (!confirm('Dismiss this question? Customers who ask it will keep getting the standard reply.')) return;
+        try { await api(`/knowledge/gaps/${g.id}/dismiss`, { method: 'POST' }); loadKnowledge(); } catch (e) { notice(e.message, true); }
+      } });
+
+      return el('article', { class: 'gap' },
+        el('div', { class: 'gap-head' },
+          el('span', { class: 'gap-title' },
+            el('span', { class: 'badge kind', text: KIND_LABELS[g.kind] ?? g.kind }),
+            g.topicLabel ?? 'Other question',
+            g.isTest && el('span', { class: 'badge test', text: 'TEST' })),
+          el('span', { class: 'muted', text: `asked ${g.times} time${g.times === 1 ? '' : 's'} by ${g.customers} customer${g.customers === 1 ? '' : 's'} · ${timeAgo(g.lastAskedAt)}` })),
+        el('p', { class: 'gap-quote', text: g.question }),
+        el('p', { class: 'muted', text: scopeText(g) }),
+        el('details', {},
+          el('summary', { text: 'Request details (JSON)' }),
+          el('pre', { text: JSON.stringify(g.requests, null, 2) })),
+        isAdmin
+          ? el('div', {}, answer, el('div', { class: 'gap-actions' }, save, dismiss))
+          : el('p', { class: 'muted', text: 'Your account can view questions but not answer them.' }));
+    }) : [el('p', { class: 'muted', text: 'Nothing waiting. Every question so far has been answered from the listings or by an approved answer.' })]));
+  }
+
+  function renderEntries(entries) {
+    const isAdmin = state.me?.role === 'admin';
+    $('entry-list').replaceChildren(...(entries.length ? entries.map((e) => {
+      const answer = el('textarea', { maxlength: '1000', 'aria-label': 'Approved answer', disabled: !isAdmin }, e.answer);
+      answer.value = e.answer;
+      const where = e.propertyId ? `this property: ${e.propertyTitle ?? e.propertyId}` : e.area ? `questions about ${e.area}` : 'every customer';
+      return el('article', { class: 'gap' },
+        el('div', { class: 'gap-head' },
+          el('span', { class: 'gap-title' },
+            e.topicLabel ?? 'Free-form answer',
+            !e.active && el('span', { class: 'badge off', text: 'Switched off' })),
+          el('span', { class: 'muted', text: `served ${e.servedCount} time${e.servedCount === 1 ? '' : 's'}${e.lastServedAt ? ` · last ${timeAgo(e.lastServedAt)}` : ''}` })),
+        e.question && el('p', { class: 'gap-quote', text: e.question }),
+        el('p', { class: 'muted', text: `Used for ${where}${e.createdBy ? ` · written by ${e.createdBy}` : ''}` }),
+        answer,
+        isAdmin && el('div', { class: 'gap-actions' },
+          el('button', { type: 'button', class: 'primary', text: 'Save changes', onclick: async () => {
+            try { await api(`/knowledge/entries/${e.id}`, { method: 'PATCH', body: JSON.stringify({ answer: answer.value }) }); notice('Saved.'); loadKnowledge(); } catch (err) { notice(err.message, true); }
+          } }),
+          el('button', { type: 'button', text: e.active ? 'Switch off' : 'Switch on', onclick: async () => {
+            try { await api(`/knowledge/entries/${e.id}`, { method: 'PATCH', body: JSON.stringify({ active: !e.active }) }); loadKnowledge(); } catch (err) { notice(err.message, true); }
+          } }),
+          el('button', { type: 'button', text: 'Delete', onclick: async () => {
+            if (!confirm('Delete this answer? Customers will get the standard reply again, and the question will return to the list when asked.')) return;
+            try { await api(`/knowledge/entries/${e.id}`, { method: 'DELETE' }); loadKnowledge(); } catch (err) { notice(err.message, true); }
+          } })));
+    }) : [el('p', { class: 'muted', text: 'No approved answers yet.' })]));
   }
 
   // ---- first load ----------------------------------------------------------------------------

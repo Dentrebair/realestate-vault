@@ -10,7 +10,7 @@ process.env.QUIET_LOGS = '1';
 
 import { generateText } from 'ai';
 import { config } from '../src/config.js';
-import { judgeReply } from './judge.js';
+import { contextFacts, judgeReply } from './judge.js';
 import { createBot, modelFrom } from '../src/telegram/bot.js';
 import { properties } from '../test/fixtures/properties.js';
 import { createFakeSupabase } from '../test/helpers/fakeSupabase.js';
@@ -102,7 +102,7 @@ async function ask(q) {
   return { reply, facts: facts.join('\n') };
 }
 
-const judge = (q, got) => judgeReply({ question: q.setup + '\n' + q.question, reply: got.reply, facts: got.facts + `\nBusiness hours: ${config.businessHours}` });
+const judge = (q, got) => judgeReply({ question: q.setup + '\n' + q.question, reply: got.reply, facts: `${got.facts}\n${contextFacts()}` });
 
 const results = [];
 let next = 0;

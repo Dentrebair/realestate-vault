@@ -410,3 +410,98 @@ test('the board page may load images from Supabase Storage and nowhere else', as
   if (config.supabaseUrl) assert.ok(imgSrc.includes(new URL(config.supabaseUrl).origin));
   assert.doesNotMatch(imgSrc, /\*/);
 });
+
+// ---- knowledge gaps and approved answers ------------------------------------------------------
+
+function withGaps() {
+  const { app, supabase } = build();
+  const gap = (id, fields) => ({
+    id, status: 'open', times: 1, is_test: false, entry_id: null, request: { question: fields.question }, topic: null, property_id: null, area: null,
+    first_asked_at: '2026-10-01T09:00:00Z', last_asked_at: '2026-10-01T09:00:00Z', ...fields
+  });
+  supabase.tables.knowledge_gaps = [
+    gap(1, { customer_id: 'telegram:1', question: 'Does it have parking?', kind: 'listing_detail', topic: 'parking', property_id: 'p04', group_key: 'listing_detail|parking|p04|', request: { question: 'Does it have parking?', property: { id: 'p04', title: 'High-Rise 2BHK Apartment near Tech Parks' }, assistantReply: 'The listing does not mention parking.' } }),
+    gap(2, { customer_id: 'telegram:2', question: 'is there parking', kind: 'listing_detail', topic: 'parking', property_id: 'p04', group_key: 'listing_detail|parking|p04|', times: 2 }),
+    gap(3, { customer_id: 'test:001', question: 'Any good school nearby?', kind: 'area_info', topic: 'nearby_places', area: 'Navalur', group_key: 'area_info|nearby_places||Navalur', is_test: true }),
+    gap(4, { customer_id: 'telegram:1', question: 'Can I get a loan?', kind: 'policy', topic: 'loan', group_key: 'policy|loan||' })
+  ];
+  supabase.tables.knowledge_entries = [];
+  return { app, supabase };
+}
+
+test('open gaps are grouped by what was asked, with the request JSON, most asked first', async () => {
+  const { app } = withGaps();
+  await request(app).get('/admin/api/knowledge/gaps').expect(401);
+
+  const agent = await signIn(app, 'viewer@x.com');
+  const { gaps } = (await agent.get('/admin/api/knowledge/gaps').expect(200)).body;
+  assert.equal(gaps.length, 3);
+  assert.equal(gaps[0].topic, 'parking');
+  assert.equal(gaps[0].times, 3);
+  assert.equal(gaps[0].customers, 2);
+  assert.equal(gaps[0].propertyTitle, 'High-Rise 2BHK Apartment near Tech Parks');
+  assert.equal(gaps[0].topicLabel, 'parking');
+  assert.ok(gaps[0].requests.some((r) => r.request.assistantReply === 'The listing does not mention parking.'), 'each ask keeps its own request JSON');
+
+  const real = (await agent.get('/admin/api/knowledge/gaps?tests=0')).body.gaps;
+  assert.deepEqual(real.map((g) => g.topic).sort(), ['loan', 'parking']);
+});
+
+test('an admin answers a gap: it becomes an approved answer and the gap closes for everyone who asked', async () => {
+  const { app, supabase } = withGaps();
+  const agent = await signIn(app);
+  const created = await agent.post('/admin/api/knowledge/gaps/1/answer').send({ answer: '  Two covered car parks are included.  ' }).expect(201);
+  assert.equal(created.body.entry.scope, 'property');
+  assert.equal(created.body.entry.property_id, 'p04');
+  assert.equal(created.body.entry.answer, 'Two covered car parks are included.');
+  assert.equal(created.body.entry.created_by, 'admin@x.com');
+
+  assert.deepEqual(supabase.tables.knowledge_gaps.filter((g) => g.status === 'answered').map((g) => g.id), [1, 2]);
+  assert.deepEqual((await agent.get('/admin/api/knowledge/gaps')).body.gaps.map((g) => g.topic).sort(), ['loan', 'nearby_places']);
+
+  const entries = (await agent.get('/admin/api/knowledge/entries').expect(200)).body.entries;
+  assert.equal(entries.length, 1);
+  assert.equal(entries[0].propertyTitle, 'High-Rise 2BHK Apartment near Tech Parks');
+  assert.equal(entries[0].servedCount, 0);
+});
+
+test('viewers cannot answer, and bad answers are refused', async () => {
+  const { app, supabase } = withGaps();
+  const viewer = await signIn(app, 'viewer@x.com');
+  await viewer.post('/admin/api/knowledge/gaps/1/answer').send({ answer: 'Yes.' }).expect(403);
+  await viewer.post('/admin/api/knowledge/gaps/1/dismiss').expect(403);
+
+  const admin = await signIn(app);
+  await admin.post('/admin/api/knowledge/gaps/1/answer').send({ answer: '' }).expect(400);
+  await admin.post('/admin/api/knowledge/gaps/1/answer').send({ answer: 'x'.repeat(1001) }).expect(400);
+  await admin.post('/admin/api/knowledge/gaps/1/answer').send({}).expect(400);
+  await admin.post('/admin/api/knowledge/gaps/1/answer').type('form').send('answer=hello').expect(415);
+  await admin.post('/admin/api/knowledge/gaps/99/answer').send({ answer: 'Fine answer.' }).expect(404);
+  assert.equal(supabase.tables.knowledge_entries.length, 0);
+});
+
+test('a gap can be dismissed, and approved answers can be edited, switched off and deleted', async () => {
+  const { app } = withGaps();
+  const agent = await signIn(app);
+  await agent.post('/admin/api/knowledge/gaps/4/dismiss').expect(200);
+  assert.equal((await agent.get('/admin/api/knowledge/gaps')).body.gaps.some((g) => g.topic === 'loan'), false);
+  assert.equal((await agent.get('/admin/api/knowledge/gaps?status=dismissed')).body.gaps.length, 1);
+  await agent.post('/admin/api/knowledge/gaps/99/dismiss').expect(404);
+
+  const entry = (await agent.post('/admin/api/knowledge/gaps/3/answer').send({ answer: 'Two CBSE schools nearby.' }).expect(201)).body.entry;
+  assert.equal(entry.scope, 'area');
+  assert.equal(entry.area, 'Navalur');
+
+  const edited = await agent.patch(`/admin/api/knowledge/entries/${entry.id}`).send({ answer: 'Three CBSE schools nearby.' }).expect(200);
+  assert.equal(edited.body.entry.answer, 'Three CBSE schools nearby.');
+  const off = await agent.patch(`/admin/api/knowledge/entries/${entry.id}`).send({ active: false }).expect(200);
+  assert.equal(off.body.entry.active, false);
+
+  await agent.patch(`/admin/api/knowledge/entries/${entry.id}`).send({ answer: '' }).expect(400);
+  await agent.patch(`/admin/api/knowledge/entries/${entry.id}`).send({ active: 'yes' }).expect(400);
+  await agent.patch('/admin/api/knowledge/entries/999').send({ active: true }).expect(404);
+
+  await agent.delete(`/admin/api/knowledge/entries/${entry.id}`).expect(200);
+  await agent.delete(`/admin/api/knowledge/entries/${entry.id}`).expect(404);
+  assert.equal((await agent.get('/admin/api/knowledge/entries')).body.entries.length, 0);
+});

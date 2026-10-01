@@ -4,6 +4,7 @@ import { setStage } from '../leadMemory.js';
 import { STAGES } from '../stages.js';
 import { clearSessionCookies, createLoginLimiter, setSessionCookies, staffFromRequest } from './auth.js';
 import { getBoard, getDemand, getLeadDetail } from './board.js';
+import { mountKnowledgeRoutes } from './knowledgeRoutes.js';
 import { mountPhotoRoutes } from './photoRoutes.js';
 
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
@@ -115,6 +116,7 @@ export function createAdminRouter({ supabase, auth, showConversations = 'test', 
   });
 
   mountPhotoRoutes(router, { supabase, requireStaff, requireJson });
+  mountKnowledgeRoutes(router, { supabase, requireStaff, requireJson });
 
   return router;
 }

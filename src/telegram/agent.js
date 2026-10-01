@@ -153,6 +153,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
       stopWhen: isStepCount(MAX_STEPS),
       abortSignal,
       providerOptions: deps.providerOptions,
+      ...(deps.temperature !== undefined ? { temperature: deps.temperature } : {}),
       ...extra
     });
 

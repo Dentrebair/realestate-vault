@@ -67,9 +67,11 @@ export function createBot({ token, botInfo, supabase, config, ai }) {
 export function modelFrom(config) {
   if (!config.openaiApiKey) return {};
   const openai = createOpenAI({ apiKey: config.openaiApiKey });
-  const reasoning = /^(gpt-5|o\d)/.test(config.openaiModel);
+  const reasoning = /^(gpt-5(?!-chat)|o\d)/.test(config.openaiModel) && !/chat/.test(config.openaiModel);
   return {
     model: openai(config.openaiModel),
-    providerOptions: reasoning ? { openai: { reasoningEffort: config.openaiReasoningEffort } } : undefined
+    providerOptions: reasoning ? { openai: { reasoningEffort: config.openaiReasoningEffort } } : undefined,
+    // Reasoning models reject temperature, so it is only passed to the others.
+    temperature: reasoning ? undefined : config.openaiTemperature
   };
 }

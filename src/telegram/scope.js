@@ -25,14 +25,15 @@ const CLASSIFIER_INSTRUCTIONS =
   'Reply with exactly one word: YES or NO.';
 
 // Fails open: if the check cannot run, treat the message as on topic so no buyer is silenced.
-export async function classifyScope(text, { generate, model, providerOptions, timeoutMs = 5000 }) {
+export async function classifyScope(text, { generate, model, providerOptions, temperature, timeoutMs = 5000 }) {
   try {
     const result = await generate({
       model,
       instructions: CLASSIFIER_INSTRUCTIONS,
       prompt: String(text).slice(0, 500),
       abortSignal: AbortSignal.timeout(timeoutMs),
-      providerOptions
+      providerOptions,
+      ...(temperature !== undefined ? { temperature } : {})
     });
     return /^\s*no\b/i.test(result.text ?? '') ? 'off_topic' : 'on_topic';
   } catch {

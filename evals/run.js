@@ -18,6 +18,7 @@ import { properties } from '../test/fixtures/properties.js';
 import { testLeads } from '../test/fixtures/testLeads.js';
 import { createFakeSupabase } from '../test/helpers/fakeSupabase.js';
 import { CORE, checksFor } from './cases.js';
+import { judgeReply, naiveValidate } from './judge.js';
 
 const args = process.argv.slice(2);
 const flag = (name) => {
@@ -48,6 +49,7 @@ async function runLead(t) {
   await supabase.from('customer_leads').insert(leadRow(t, userId));
 
   const toolCalls = [];
+  const facts = [];
   let tokens = 0;
   const base = modelFrom(config);
   const bot = createBot({
@@ -61,6 +63,7 @@ async function runLead(t) {
         const result = await generateText(options);
         for (const step of result.steps ?? []) {
           for (const call of step.toolCalls ?? []) toolCalls.push({ name: call.toolName, input: call.input });
+          for (const r of step.toolResults ?? []) facts.push(JSON.stringify(r.output ?? r.result ?? r));
         }
         tokens += result.usage?.totalTokens ?? 0;
         return result;
@@ -112,6 +115,11 @@ async function runLead(t) {
     tokens
   };
   result.checks = checksFor(n, result);
+  result.facts = facts.join('\n');
+  result.outcomes = facts.map((f) => { try { return JSON.parse(f).outcome; } catch { return null; } }).filter(Boolean);
+  if (args.includes('--judge') && result.replies.length) {
+    result.judged = await judgeReply({ question: t.messages.join('\n'), reply: result.replies.join('\n'), facts: `${result.facts}\nBusiness hours: ${config.businessHours}` });
+  }
   return result;
 }
 
@@ -177,6 +185,20 @@ for (const r of results) {
 }
 
 const tokens = results.reduce((sum, r) => sum + r.tokens, 0);
+if (args.includes('--judge')) {
+  const judged = results.filter((r) => r.judged);
+  const flagged = judged.filter((r) => r.judged.verdict !== 'grounded');
+  const byType = {};
+  for (const r of flagged) for (const u of r.judged.unsupported) byType[u.type] = (byType[u.type] ?? 0) + 1;
+  console.log(`\nGrounding judge over real flows: ${judged.length - flagged.length} of ${judged.length} replies fully grounded; unsupported claims by type: ${JSON.stringify(byType)}`);
+  for (const r of flagged) for (const u of r.judged.unsupported) console.log(`   ${r.lead.id.slice(5)} ${u.type}: ${u.claim}`);
+
+  // The keyword check from the suggestion under test, applied to real replies where nothing matched exactly.
+  const noMatch = results.filter((r) => r.replies.length && r.outcomes.length && !r.outcomes.includes('matches'));
+  const wrongly = noMatch.filter((r) => !naiveValidate(r.replies.join(' '), true));
+  console.log(`\nKeyword validator on ${noMatch.length} real no-exact-match replies: would discard ${wrongly.length}. Of those, replies the judge found fully grounded: ${wrongly.filter((r) => r.judged?.verdict === 'grounded').length}`);
+  for (const r of wrongly.slice(0, 4)) console.log(`   would discard: ${r.replies.join(' ').replace(/\n/g, ' ').slice(0, 170)}`);
+}
 console.log(`\n${results.length - failed - warned} passed, ${warned} with warnings, ${failed} failed. ${(tokens / 1000).toFixed(0)}k tokens, ${((Date.now() - started) / 1000).toFixed(0)}s.`);
 if (failed) console.log('Re-run a failing lead with: npm run eval -- --lead <id> --verbose');
 process.exit(failed ? 1 : 0);

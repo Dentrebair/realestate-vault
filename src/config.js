@@ -26,6 +26,8 @@ const configSchema = z.object({
   openaiModel: z.string().min(1).default('gpt-5-mini'),
   openaiReasoningEffort: z.enum(['minimal', 'low', 'medium', 'high']).default('minimal'),
   agentTimeoutMs: z.coerce.number().int().positive().default(25000),
+  // Only for non-reasoning models such as gpt-4.1-mini. Reasoning models (gpt-5, o-series) reject it.
+  openaiTemperature: z.coerce.number().min(0).max(2).optional(),
 
   // Who may read the actual conversation on the lead board: test leads only, everyone, or nobody.
   boardShowConversations: z.enum(['test', 'all', 'none']).default('test'),
@@ -58,6 +60,7 @@ export const config = configSchema.parse({
   openaiModel: blank(process.env.OPENAI_MODEL),
   openaiReasoningEffort: blank(process.env.OPENAI_REASONING_EFFORT),
   agentTimeoutMs: blank(process.env.AGENT_TIMEOUT_MS),
+  openaiTemperature: blank(process.env.OPENAI_TEMPERATURE),
 
   boardShowConversations: blank(process.env.BOARD_SHOW_CONVERSATIONS),
 

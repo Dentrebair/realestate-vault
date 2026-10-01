@@ -198,11 +198,9 @@ evals/          model evals             scripts/        seeding and helpers
 - The HTTP tool routes are off in production unless `ENABLE_TOOL_ROUTES=true`, and then need `CONNECTOR_BEARER_TOKEN`.
 - Secrets live in `.env`, which is not committed. If one is ever pasted somewhere it should not be, rotate it.
 
-## Deploying to Railway (not done yet)
+## Deploying to Railway
 
-Deliberately left for last, after the Phase 2 work: create a Railway project from this repository's `telegram` branch, set the
-variables from `.env.example` (leave `TELEGRAM_MODE` empty, `NODE_ENV=production`), and Railway's domain becomes the
-webhook address. One instance is assumed; the duplicate-message and rate-limit guards live in memory.
+See [docs/DEPLOY.md](docs/DEPLOY.md) for the steps, the variables to set, and what to check afterwards.
 
 ## Troubleshooting
 

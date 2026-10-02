@@ -54,7 +54,11 @@ const BOT_INFO = {
   can_join_groups: true, can_read_all_group_messages: false, supports_inline_queries: false
 };
 
-function harness({ generate = async () => ({ text: 'ok' }), tables = {}, config = {}, failMethod = null } = {}) {
+// `route` stands in for the model's routing answer. Without it the router gets no usable answer, so the keyword rules decide.
+const ROUTER_CALL = /Pick the ONE label/;
+function harness({ generate: given = async () => ({ text: 'ok' }), route = null, tables = {}, config = {}, failMethod = null } = {}) {
+  const generate = async (options) =>
+    ROUTER_CALL.test(options.instructions ?? '') ? { text: route ? (typeof route === 'function' ? route(options.prompt) : route) : 'no label' } : given(options);
   const supabase = createFakeSupabase({ properties, ...tables });
   const calls = [];
   const bot = createBot({
@@ -1071,4 +1075,45 @@ test('the router accepts a topic by key or description, and rejects an unknown l
   assert.deepEqual(await routeMessage({ text: 'x', deps: said('{"label":"count","topic":null}') }), { label: 'count', topic: null });
   assert.equal(await routeMessage({ text: 'x', deps: said('{"label":"nonsense"}') }), null);
   assert.equal(await routeMessage({ text: 'x', deps: { generate: async () => { throw new Error('timeout'); }, model: {} } }), null);
+});
+
+test('the model recognises hours, bot, count, availability and other-city questions that the keyword rules miss', async () => {
+  const cases = [
+    ['timings enna', '{"label":"hours","topic":null}', /Mon to Sat, 10am to 7pm/],
+    ['is this a human', '{"label":"human","topic":null}', /automated assistant/],
+    ['what is your total inventory', '{"label":"count","topic":null}', /We currently have \d+ properties listed/],
+    ['I want to buy in Coimbatore', '{"label":"other_city","topic":null}', /only handle property in Chennai/],
+    ['has the Navalur flat been sold', '{"label":"availability","topic":null}', /is listed as/]
+  ];
+  for (const [message, label, expected] of cases) {
+    const h = harness({ route: label, generate: async () => { throw new Error('the model must not write this reply'); } });
+    await seedLead(h, {}, 'interested');
+    await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+    await h.send(say(message));
+    assert.match(h.toUser()[0].text, expected, message);
+    assert.equal(h.toUser().length, 1, message);
+  }
+});
+
+test('when the router gives no usable answer, the keyword rules still answer', async () => {
+  const h = harness({ route: 'not json at all' });
+  await seedLead(h, {}, 'interested');
+  await h.send(say('what are your office hours'));
+  assert.match(h.toUser()[0].text, /Mon to Sat, 10am to 7pm/);
+});
+
+test('an availability label is ignored for a question about a fact of the listing', async () => {
+  const h = harness({ route: '{"label":"availability","topic":null}' });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+  await h.send(say('what is the monthly maintenance'));
+  assert.doesNotMatch(h.toUser()[0].text, /is listed as/);
+});
+
+test('the model says it is a search, so an hours-like word in a search does not trigger the hours reply', async () => {
+  const h = harness({ route: '{"label":"search","topic":null}', generate: async () => ({ text: 'Here you go.' }) });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic' });
+  await h.send(say('show me flats with opening hours near the clinic'));
+  assert.doesNotMatch(h.toUser()[0]?.text ?? '', /Mon to Sat/);
 });

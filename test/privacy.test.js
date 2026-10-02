@@ -35,7 +35,7 @@ function harness({ tables = {}, config = {} } = {}) {
       requireConsent: true, businessName: 'Acme Homes', privacyContact: 'privacy@acme.example', consentVersion: 'v1',
       chatRetentionHours: 24, leadRetentionHours: 24 * 365, businessHours: 'Mon to Sat', salesDeskChatId: 999, agentTimeoutMs: 5000, ...config
     },
-    ai: { generate: async () => (modelCalls++, { text: 'Happy to help.' }), model: {}, providerOptions: undefined }
+    ai: { generate: async ({ instructions = '' }) => (/Pick the ONE label/.test(instructions) ? { text: 'no label' } : (modelCalls++, { text: 'Happy to help.' })), model: {}, providerOptions: undefined }
   });
   bot.api.config.use(async (_p, method, payload) => {
     calls.push({ method, payload });

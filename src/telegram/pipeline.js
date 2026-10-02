@@ -11,6 +11,7 @@ import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
 import { consentPrompt, needsConsent } from './consent.js';
 import { judgeNegotiation } from './negotiation.js';
+import { routeMessage } from './router.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { failureAlert, notifySales } from './sales.js';
 import { scopeOf } from './scope.js';
@@ -55,7 +56,12 @@ export async function handleText(ctx, deps) {
 
   // Asking for a discount is negotiation whether or not the model notices. Code does not rely on it.
   // Is the customer negotiating, and did they make an offer? The model decides; code then enforces what follows.
-  const judged = await judgeNegotiation({ text, shown: lead.botState?.shown ?? [], deps: deps.agent });
+  // The two model reads of the message run side by side, so the customer waits for one, not two.
+  const shownNow = lead.botState?.shown ?? [];
+  const [judged, route] = await Promise.all([
+    judgeNegotiation({ text, shown: shownNow, deps: deps.agent }),
+    routeMessage({ text, shown: shownNow, deps: deps.agent })
+  ]);
   if (judged.negotiating) {
     await setStage(supabase, customerId, 'negotiating', {
       actor: 'system',
@@ -66,7 +72,7 @@ export async function handleText(ctx, deps) {
   // Factual questions are answered from data, before the model is asked anything. If we cannot answer,
   // the question is saved as a knowledge gap for the business owners to fill in.
   try {
-    const answered = await answerFromData({ text, lead, supabase, config, intent: judged });
+    const answered = await answerFromData({ text, lead, supabase, config, intent: judged, route });
     if (answered) {
       await saveMessage(supabase, customerId, 'user', text);
       await ctx.reply(answered.reply);

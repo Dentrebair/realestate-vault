@@ -77,7 +77,7 @@ export const asksToCompare = (t) => COMPARE.test(t);
 
 const ONLY_SALES = 'We only sell properties, so I cannot help with rentals or leases. If you are open to buying, tell me the area, your budget and the kind of property, and I will find options.';
 
-export async function answerFromData({ text, lead, supabase, config: given = appConfig, intent = null }) {
+export async function answerFromData({ text, lead, supabase, config: given = appConfig, intent = null, route = null }) {
   // Callers may pass only the settings they care about; anything missing comes from the app's own settings.
   const config = { ...appConfig, ...given };
   const shown = lead.botState?.shown ?? [];
@@ -95,6 +95,8 @@ export async function answerFromData({ text, lead, supabase, config: given = app
   // ---- an offer on a property in play ("can i get for 54L"): not a search, and not a price we can agree ----
   const offer = intent ? intent.offer : isPriceOffer(t, shown) ? offeredAmount(t) : null;
   const negotiating = intent ? intent.negotiating : isNegotiation(t);
+  // What the message is about. The model's label decides when there is one; the keyword rules decide when there is not.
+  const says = (label, rule) => (route ? route.label === label : rule(t));
 
   if (offer !== null && shown.length) {
     const ref = referenced(t, shown);
@@ -138,19 +140,19 @@ export async function answerFromData({ text, lead, supabase, config: given = app
     }
   }
 
-  if (HOURS.test(t)) {
+  if (says('hours', asksHours)) {
     return { reply: `Our team confirms site visit requests ${config.businessHours}.` };
   }
 
-  if (HUMAN.test(t)) {
+  if (says('human', asksIfHuman)) {
     return { reply: 'I am an automated assistant. Our sales team are people, and they follow up when you request a site visit.' };
   }
 
-  if (asksOtherCity(t)) {
+  if (says('other_city', asksOtherCity)) {
     return { reply: 'We only handle property in Chennai. Tell me what you are looking for in Chennai and I will show you what we have.' };
   }
 
-  if (asksCount(t)) {
+  if (says('count', asksCount)) {
     const { data, error } = await supabase.from(config.propertiesTable).select('category,status').limit(1000);
     if (error) throw error;
     const live = data.filter((p) => ['available', 'under_construction'].includes(p.status));
@@ -160,7 +162,8 @@ export async function answerFromData({ text, lead, supabase, config: given = app
     return { reply: `We currently have ${live.length} properties listed: ${parts.join(', ')}. Tell me what you are looking for and I will show you the closest.` };
   }
 
-  if (asksAvailability(t)) {
+  // A question about a fact of the listing ("is there a current tenant") is not about availability, whatever the label.
+  if (route ? route.label === 'availability' && !topicOf(t) : asksAvailability(t)) {
     const ref = referenced(t, shown);
     if (ref.ambiguous) return { reply: which(ref.ambiguous) };
     if (ref.property) {

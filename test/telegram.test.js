@@ -5,6 +5,7 @@ import { createApp } from '../src/app.js';
 import { addToShortlist, getLead, setBotState, upsertLeadMemory } from '../src/leadMemory.js';
 import { claimsVisitButton, guardAmounts, mentionUnavailable, moneyHint, withoutBackstage, withoutCardTapping, withoutDashes, withoutPhantomButtons, withoutPhotoClaims } from '../src/telegram/agent.js';
 import { asksAboutPhotos, isNegotiation } from '../src/telegram/intent.js';
+import { ruleVerdict } from '../src/telegram/negotiation.js';
 import { buildInstructions } from '../src/telegram/systemPrompt.js';
 import { createBot } from '../src/telegram/bot.js';
 import { CAPTION_LIMIT, renderCard } from '../src/telegram/cards.js';
@@ -847,15 +848,15 @@ test('"tap the card" is removed, because the card itself is not tappable', () =>
   assert.equal(withoutCardTapping('Listings have images in their cards, tap a card to view them.'), '');
 });
 
-test('an offer on the property just shown moves the lead to negotiating, and the model is not asked', async () => {
+test('an offer on the property just shown moves the lead to negotiating, and the model writes no reply', async () => {
   let asked = 0;
-  const h = harness({ generate: async () => (asked++, { text: 'x' }) });
+  const h = harness({ generate: async ({ instructions }) => (asked++, /route messages/.test(instructions) ? { text: '{"negotiating": true, "offer": {"amount": 54, "unit": "lakh"}}' } : { text: 'x' }) });
   await seedLead(h, { budgetMax: 7000000 }, 'interested');
   await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
 
   await h.send(say('can i get for 54L'));
 
-  assert.equal(asked, 0);
+  assert.equal(asked, 1, 'only the judging step ran');
   assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
   const move = h.rows('lead_events').find((e) => e.event_type === 'stage_changed' && e.to_stage === 'negotiating');
   assert.equal(move.note, 'made a price offer');
@@ -880,4 +881,66 @@ test('asking a price answers it, shows the card, and does not call it negotiatio
   assert.deepEqual(buttons(sent[1]), ['action:visit:p04', 'action:save:p04']);
   assert.equal((await getLead(h.supabase, ID)).leadStage, 'interested', 'a price question is interest, not negotiation');
   assert.deepEqual((await getLead(h.supabase, ID)).botState.shown.map((p) => p.id), ['p04']);
+});
+
+function judgeHarness(verdict) {
+  const calls = [];
+  const h = harness({
+    generate: async ({ instructions }) => {
+      if (/route messages/.test(instructions)) {
+        calls.push(1);
+        if (verdict instanceof Error) throw verdict;
+        return { text: verdict };
+      }
+      return { text: 'Here are some options.' };
+    }
+  });
+  return { h, calls };
+}
+
+test('the model can recognise negotiation the keyword rules would miss', async () => {
+  const { h, calls } = judgeHarness('{"negotiating": true, "offer": null}');
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+
+  await h.send(say('what colour is the building?'));
+  assert.equal(calls.length, 0, 'no price talk, so the model is not asked');
+
+  await h.send(say('is there any flexibility in the price?'));
+  assert.equal(calls.length, 1);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
+});
+
+test('a search that only mentions money is never an offer, whatever the model says', async () => {
+  const { h } = judgeHarness('{"negotiating": true, "offer": {"amount": 54, "unit": "lakh"}}');
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+
+  await h.send(say('show me something under 54L'));
+
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'interested');
+  assert.ok(!h.toUser().some((m) => /cannot agree a price/.test(m.text)));
+});
+
+test('if the judging step fails, the keyword rules still catch a plain offer', async () => {
+  const { h } = judgeHarness(new Error('timed out'));
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+
+  await h.send(say('can i get for 54L'));
+
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
+  assert.ok(h.toUser().some((m) => /cannot agree a price/.test(m.text)));
+});
+
+test('a unit the model guessed is rejected when the amount is not believable for the listing', async () => {
+  const { h } = judgeHarness('{"negotiating": true, "offer": {"amount": 54, "unit": "crore"}}');
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+
+  await h.send(say('what about fifty four for this'));
+
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
+  const lead = await getLead(h.supabase, ID);
+  assert.ok(!lead.keyPoints.some((k) => /Offered/.test(k.text)), 'no made-up amount is recorded');
 });

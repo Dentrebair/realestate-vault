@@ -1,10 +1,17 @@
-// Who decides "is this customer negotiating?": hand-written rules, or the model? Both are run on the same messages.
+// Is the negotiation judge right? Runs the real judge (src/telegram/negotiation.js) and the old keyword rules on the
+// same labelled messages, with the real model.
+//
+//   npm run eval:negotiation              one pass
+//   npm run eval:negotiation -- --repeat 3   also checks the model gives the same answer each time
+//
+// Fails (exit 1) if the judge scores under 38 of 40 or gets any of the CLEAR messages wrong.
+// When a real customer message is misjudged, add it to the list below.
 // A property (High-Rise 2BHK Apartment near Tech Parks, listed at ₹62 L) has just been shown in every case.
 import 'dotenv/config';
 import { generateText } from 'ai';
 import { createOpenAI } from '@ai-sdk/openai';
 import { config } from '../src/config.js';
-import { isNegotiation, isPriceOffer } from '../src/telegram/intent.js';
+import { judgeNegotiation, ruleVerdict } from '../src/telegram/negotiation.js';
 
 const shown = [{ id: 'p04', title: 'High-Rise 2BHK Apartment near Tech Parks', location: 'Navalur, OMR, Chennai', priceDisplay: '₹62 L' }];
 
@@ -25,27 +32,16 @@ const cases = [
   ['sounds expensive, show me something cheaper', false], ['how much is the rent in that area', false]
 ];
 
-const model = createOpenAI({ apiKey: config.openaiApiKey })(config.openaiModel);
-const property = shown[0];
+const CLEAR = new Set(['can i get for 54L', 'will you take 55 lakh', 'how about 58L', 'what is your last price', 'is the price negotiable?',
+  'price of High-Rise 2BHK near omr?', 'show me homes under 54L', 'under 54L', 'thanks', 'is it available']);
+const THRESHOLD = 38;
+const repeat = Number(process.argv[process.argv.indexOf('--repeat') + 1]) || 1;
 
-async function askModel(message) {
-  const started = Date.now();
-  const { text } = await generateText({
-    model,
-    providerOptions: { openai: { reasoningEffort: 'minimal' } },
-    instructions:
-      'You route messages for a real-estate chat assistant. A property was just shown to the customer: ' +
-      `"${property.title}" in ${property.location}, listed at ${property.priceDisplay}.\n` +
-      'Decide whether the customer\'s message means they are NEGOTIATING: trying to pay less than the listed price, asking for a discount or a better price, ' +
-      'making an offer, comparing with another seller\'s price, or asking whether the price can change. ' +
-      'It is NOT negotiating if they ask the price, accept it, set a budget for a new search, ask for cheaper properties to look at, or ask anything else. ' +
-      'The customer may write in English, Tamil, or Tamil in English letters. Reply with JSON only: {"negotiating": true|false}',
-    prompt: message
-  });
-  let value = false;
-  try { value = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1)).negotiating === true; } catch { /* counts as a miss */ }
-  return { value, ms: Date.now() - started };
-}
+const deps = {
+  generate: generateText,
+  model: createOpenAI({ apiKey: config.openaiApiKey })(config.openaiModel),
+  providerOptions: { openai: { reasoningEffort: config.openaiReasoningEffort } }
+};
 
 const rows = [];
 let next = 0;
@@ -53,18 +49,28 @@ await Promise.all(Array.from({ length: 5 }, async () => {
   while (next < cases.length) {
     const i = next++;
     const [message, truth] = cases[i];
-    const rules = isNegotiation(message) || isPriceOffer(message, shown);
-    const llm = await askModel(message).catch(() => ({ value: null, ms: 0 }));
-    rows[i] = { message, truth, rules, llm: llm.value, ms: llm.ms };
+    const rules = ruleVerdict(message, shown).negotiating;
+    const answers = [];
+    for (let n = 0; n < repeat; n++) answers.push((await judgeNegotiation({ text: message, shown, deps })));
+    const first = answers[0];
+    rows[i] = { message, truth, rules, judge: first.negotiating, source: first.source, stable: answers.every((a) => a.negotiating === first.negotiating) };
   }
 }));
 
 const score = (key) => rows.filter((r) => r[key] === r.truth).length;
 const wrong = (key) => rows.filter((r) => r[key] !== r.truth);
 console.log(`Messages: ${rows.length} (${rows.filter((r) => r.truth).length} should move to negotiating)\n`);
-console.log(`Hand-written rules : ${score('rules')} of ${rows.length} right`);
+console.log(`Keyword rules only : ${score('rules')} of ${rows.length} right`);
 for (const r of wrong('rules')) console.log(`   ${r.truth ? 'MISSED  ' : 'FALSE+  '} ${r.message}`);
-console.log(`\nThe model deciding : ${score('llm')} of ${rows.length} right   (median ${[...rows.map((r) => r.ms)].sort((a, b) => a - b)[Math.floor(rows.length / 2)]} ms each)`);
-for (const r of wrong('llm')) console.log(`   ${r.truth ? 'MISSED  ' : 'FALSE+  '} ${r.message}`);
-const both = rows.filter((r) => (r.rules || r.llm) === r.truth).length;
-console.log(`\nEither one says yes : ${both} of ${rows.length} right`);
+console.log(`\nThe real judge     : ${score('judge')} of ${rows.length} right`);
+for (const r of wrong('judge')) console.log(`   ${r.truth ? 'MISSED  ' : 'FALSE+  '} ${r.message}  [${r.source}]`);
+const fellBack = rows.filter((r) => r.source === 'rules');
+if (fellBack.length) console.log(`\n${fellBack.length} messages fell back to the rules (the model call failed)`);
+const unstable = rows.filter((r) => !r.stable);
+if (repeat > 1) console.log(`\nSame answer on all ${repeat} runs: ${rows.length - unstable.length} of ${rows.length}`);
+for (const r of unstable) console.log(`   UNSTABLE ${r.message}`);
+
+const clearWrong = wrong('judge').filter((r) => CLEAR.has(r.message));
+const failed = score('judge') < THRESHOLD || clearWrong.length > 0 || unstable.some((r) => CLEAR.has(r.message));
+console.log(failed ? `\nFAIL: needs at least ${THRESHOLD} right and every clear message right` : `\nPASS`);
+process.exit(failed ? 1 : 0);

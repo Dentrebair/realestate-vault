@@ -10,7 +10,7 @@ import { rememberShown, sendCard } from './present.js';
 import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
 import { consentPrompt, needsConsent } from './consent.js';
-import { isNegotiation, isPriceOffer } from './intent.js';
+import { judgeNegotiation } from './negotiation.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { failureAlert, notifySales } from './sales.js';
 import { scopeOf } from './scope.js';
@@ -54,19 +54,19 @@ export async function handleText(ctx, deps) {
   }
 
   // Asking for a discount is negotiation whether or not the model notices. Code does not rely on it.
-  // So is an offer on a property in play ("can i get for 54L").
-  const offered = isPriceOffer(text, lead.botState?.shown ?? []);
-  if (isNegotiation(text) || offered) {
+  // Is the customer negotiating, and did they make an offer? The model decides; code then enforces what follows.
+  const judged = await judgeNegotiation({ text, shown: lead.botState?.shown ?? [], deps: deps.agent });
+  if (judged.negotiating) {
     await setStage(supabase, customerId, 'negotiating', {
       actor: 'system',
-      reason: offered ? 'made a price offer' : 'asked about price or a discount'
+      reason: judged.offer ? 'made a price offer' : 'asked about price or a discount'
     }).catch((error) => log('stage_failed', { customerId, error: error.message }, 'error'));
   }
 
   // Factual questions are answered from data, before the model is asked anything. If we cannot answer,
   // the question is saved as a knowledge gap for the business owners to fill in.
   try {
-    const answered = await answerFromData({ text, lead, supabase, config });
+    const answered = await answerFromData({ text, lead, supabase, config, intent: judged });
     if (answered) {
       await saveMessage(supabase, customerId, 'user', text);
       await ctx.reply(answered.reply);

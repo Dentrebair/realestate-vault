@@ -60,7 +60,7 @@ const findEntry = (supabase, query) => findStoredEntry(supabase, query).catch(()
 const which = (shown) =>
   `Which one do you mean? ${shown.map((p, i) => `${i + 1}) ${p.title}`).join('; ')}. You can say "the first one" or "number 2".`;
 
-export async function answerFromData({ text, lead, supabase, config: given = appConfig }) {
+export async function answerFromData({ text, lead, supabase, config: given = appConfig, intent = null }) {
   // Callers may pass only the settings they care about; anything missing comes from the app's own settings.
   const config = { ...appConfig, ...given };
   const shown = lead.botState?.shown ?? [];
@@ -73,12 +73,15 @@ export async function answerFromData({ text, lead, supabase, config: given = app
   }
 
   // ---- an offer on a property in play ("can i get for 54L"): not a search, and not a price we can agree ----
-  if (isPriceOffer(t, shown)) {
+  const offer = intent ? intent.offer : isPriceOffer(t, shown) ? offeredAmount(t) : null;
+  const negotiating = intent ? intent.negotiating : isNegotiation(t);
+
+  if (offer !== null && shown.length) {
     const ref = referenced(t, shown);
     if (ref.ambiguous) return { reply: which(ref.ambiguous) };
     const found = ref.property ? await getProperty(supabase, ref.property.id) : null;
     if (found) {
-      const amount = offeredAmount(t);
+      const amount = offer;
       const listed = found.row.price_inr == null ? `as ${POR_LABEL}` : `at ${priceDisplay(found.row.price_inr)}`;
       await upsertLeadMemory(
         supabase,
@@ -97,7 +100,7 @@ export async function answerFromData({ text, lead, supabase, config: given = app
   }
 
   // ---- "what is the price of X": answer it, naming the listing, and show it if it is not already on screen ----
-  if (/\b(price|cost|how much|asking)\b/i.test(t) && isQuestion(t) && !isNegotiation(t) && !/\b(per sq|market|average|trend|forecast|appreciat\w*|worth it)\b/i.test(t)) {
+  if (/\b(price|cost|how much|asking)\b/i.test(t) && isQuestion(t) && !negotiating && !/\b(per sq|market|average|trend|forecast|appreciat\w*|worth it)\b/i.test(t)) {
     const named = await findByName(supabase, t, config.propertiesTable).catch(() => null);
     let row = named;
     if (!row && !hasSearchIntent(t)) {

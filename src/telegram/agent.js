@@ -11,7 +11,7 @@ import { narrateSearch } from './narrate.js';
 import { recordGap, relevantEntries } from '../knowledge.js';
 import { locateProperty } from '../microMarkets.js';
 import { sentencesOf, truthful } from './truthguard.js';
-import { rememberShown, sendSearchResult } from './present.js';
+import { prepareSearchResult, rememberShown } from './present.js';
 import { buildInstructions } from './systemPrompt.js';
 
 const MAX_STEPS = 4;
@@ -32,7 +32,7 @@ export function createDeps(overrides = {}) {
 
 export async function runAgentTurn({ deps, supabase, api, chatId, lead, history, text }) {
   const customerId = lead.customerId;
-  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [], visitPromptSent: false, narration: null };
+  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [], visitPromptSent: false, narration: null, sendCards: null };
 
   const record = (output) => {
     state.toolOutputs.push(JSON.stringify(output));
@@ -42,7 +42,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
   const tools = {
     search_properties: tool({
       description:
-        'Find properties that match what the customer wants, or the closest options with how they differ. Cards are sent to the customer automatically.',
+        'Find properties that match what the customer wants, or the closest options with how they differ. Cards are sent to the customer automatically, right after your reply.',
       inputSchema: z.object({
         location: z.string().optional().describe('Area, corridor or landmark as the customer said it, e.g. OMR, Anna Nagar, near Tidel Park'),
         query: z.string().optional().describe('Kind of property and features, e.g. flat, villa, penthouse, office, cloud kitchen, sea facing'),
@@ -169,7 +169,9 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
       ...extra
     });
 
-  let result = await run();
+  let result;
+  try {
+  result = await run();
 
   // The model sometimes says "searching now" and stops without searching. Run the turn again with the
   // first step forced to use a tool, so the customer is not left waiting for results that never come.
@@ -183,6 +185,11 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
       prepareStep: ({ stepNumber }) =>
         stepNumber === 0 ? { toolChoice: { type: 'tool', toolName: 'request_site_visit' } } : {}
     });
+  }
+  } catch (error) {
+    // Results the customer asked for are not lost because the reply failed.
+    await state.sendCards?.();
+    throw error;
   }
 
   // When nothing matched exactly, code writes the reply from the search result. The model is never asked to
@@ -204,13 +211,14 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
           state.unavailable
         );
     const before = reply;
+    reply = cardsFollow(reply);
     reply = truthful(reply, allowedContext({ lead, history, text, state, entries }));
     await noteGap({ supabase, lead, text, state, modelReply: before, finalReply: reply });
   }
 
   if (!reply) {
     reply = blocked
-      ? state.shown.length ? 'Please see the details in the cards above.' : 'Let me check the details with our team.'
+      ? state.shown.length ? 'Please see the details in the cards below.' : 'Let me check the details with our team.'
       : state.shown.length ? 'Here is what I found.' : 'Could you tell me a little more about what you are looking for?';
   }
 
@@ -218,6 +226,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     text: withoutDashes(reply).slice(0, MAX_REPLY_CHARS),
     blocked,
     shown: state.shown,
+    sendCards: state.sendCards,
     usage: result.usage
   };
 }
@@ -281,6 +290,14 @@ export function withoutBackstage(reply) {
 
 // Cards have buttons, but the card itself is not tappable. "Tap the card to see details" is never true.
 const TAP_CARD = /\b(tap|click|press|open|select) (on )?(a|the|that|this|each|any) (card|property|listing|picture|image)\b/i;
+
+// The reply is sent before the cards, so words that assume the cards are already on screen are corrected.
+export function cardsFollow(reply) {
+  return String(reply)
+    .replace(/\b(cards?|options?|listings?|properties|details|results?|ones?)\s+(shown\s+)?above\b/gi, (_, noun) => `${noun} below`)
+    .replace(/\b(the|in the|see the) above\b/gi, (m) => m.replace('above', 'below'))
+    .replace(/\bI(?: have|'ve)? (?:just )?(?:showed|shown|sent)\b/g, 'I am showing');
+}
 
 export function withoutCardTapping(reply) {
   if (!TAP_CARD.test(reply)) return reply;
@@ -354,7 +371,9 @@ async function searchTool({ input, supabase, api, chatId, lead, state }) {
   const result = await searchProperties(supabase, filters);
   if (!result.configured) return { error: result.message };
 
-  const views = await sendSearchResult({ api, supabase, chatId, result, lead });
+  // The cards are held back and sent after the reply text, so the customer reads the text first.
+  const { views, send } = await prepareSearchResult({ api, supabase, chatId, result, lead });
+  state.sendCards = send;
   state.shown = rememberShown(views);
   state.unavailable = result.unavailable;
   state.narration = narrateSearch(result);

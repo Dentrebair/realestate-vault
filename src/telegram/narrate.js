@@ -19,7 +19,7 @@ export function narrateSearch(result) {
   switch (result.outcome) {
     case 'recommendations': {
       const n = result.recommendations.length;
-      main = `I do not have an exact match for ${c.summary}. Here ${n === 1 ? 'is the closest option' : `are the ${n} closest options`}, and each card says how it differs.`;
+      main = `I do not have an exact match for ${c.summary}. Here ${n === 1 ? 'is the closest option' : `are the ${n} closest options`}, and each card below says how it differs.`;
       if (result.droppedOverBudget?.length) {
         main += ` Also in ${c.area ?? 'that area'}, but well above your budget: ${list(result.droppedOverBudget.map((p) => `${p.title} at ${p.priceDisplay}`))}.`;
       }

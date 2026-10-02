@@ -3,7 +3,7 @@ import test from 'node:test';
 import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { addToShortlist, getLead, setBotState, upsertLeadMemory } from '../src/leadMemory.js';
-import { claimsVisitButton, guardAmounts, mentionUnavailable, moneyHint, withoutBackstage, withoutCardTapping, withoutDashes, withoutPhantomButtons, withoutPhotoClaims } from '../src/telegram/agent.js';
+import { claimsVisitButton, guardAmounts, mentionUnavailable, moneyHint, withoutBackstage, withoutCardTapping, cardsFollow, withoutDashes, withoutPhantomButtons, withoutPhotoClaims } from '../src/telegram/agent.js';
 import { asksAboutPhotos, isNegotiation } from '../src/telegram/intent.js';
 import { ruleVerdict } from '../src/telegram/negotiation.js';
 import { buildInstructions } from '../src/telegram/systemPrompt.js';
@@ -138,7 +138,7 @@ test('groups, duplicates and non-text messages', async () => {
 
 // ---- a conversational turn ------------------------------------------------------------------
 
-test('a search turn sends cards first, then the reply; saves requirements; moves the lead to interested', async () => {
+test('a search turn sends the reply first, then the cards; saves requirements; moves the lead to interested', async () => {
   const h = harness({
     generate: async ({ tools }) => {
       await tools.save_requirements.execute(
@@ -157,7 +157,7 @@ test('a search turn sends cards first, then the reply; saves requirements; moves
 
   const messages = h.toUser();
   assert.equal(messages.length, 2);
-  const [card, reply] = messages;
+  const [reply, card] = messages;
   assert.match(card.text, /Close option/);
   assert.match(card.text, /Navalur/);
   assert.match(card.text, /1 bedroom fewer \(2 instead of 3\)/);
@@ -165,7 +165,7 @@ test('a search turn sends cards first, then the reply; saves requirements; moves
   assert.equal(card.parse_mode, 'HTML');
   assert.deepEqual(buttons(card), ['action:visit:p04', 'action:save:p04']);
   // Nothing matched exactly, so the reply is written by code from the search result, not by the model.
-  assert.equal(reply.text, 'I do not have an exact match for 3 bedroom residential in OMR up to ₹1.5 Cr. Here is the closest option, and each card says how it differs.');
+  assert.equal(reply.text, 'I do not have an exact match for 3 bedroom residential in OMR up to ₹1.5 Cr. Here is the closest option, and each card below says how it differs.');
 
   assert.ok(h.sent('sendChatAction').some((a) => a.action === 'typing'));
 
@@ -204,7 +204,7 @@ test('a saved budget carries into the next search without being asked again', as
   await seedLead(h, { budgetMax: L(70), propertyCategories: ['residential'] });
   await h.send(say('show me homes'));
 
-  const cards = h.toUser().slice(0, -1).map((m) => m.text).join('\n');
+  const cards = h.toUser().slice(1).map((m) => m.text).join('\n');
   assert.match(cards, /Navalur/);
   assert.doesNotMatch(cards, /Sky Mansion/, 'the ₹4.8 Cr flat is over the saved budget');
   assert.doesNotMatch(cards, /Penthouse/, 'sold listings are never shown');
@@ -218,7 +218,7 @@ test('a null-price listing never gets a number', async () => {
     }
   });
   await h.send(say('heritage bungalow in Alwarpet'));
-  assert.match(h.toUser()[0].text, /Price on Request \(POR\)/);
+  assert.ok(h.toUser().some((m) => /Price on Request \(POR\)/.test(m.text)));
 });
 
 test('an amount the model invents is replaced', async () => {
@@ -549,7 +549,7 @@ test('an unanswered search claim is retried with a tool forced on the first step
   assert.deepEqual(calls[1].prepareStep({ stepNumber: 0 }), { toolChoice: 'required' });
   assert.deepEqual(calls[1].prepareStep({ stepNumber: 1 }), {});
   assert.ok(h.toUser().some((m) => /How it differs|Matches your requirements/.test(m.text)), 'cards were sent');
-  assert.match(h.toUser().at(-1).text, /^I do not have an exact match for 3 bedroom residential in Anna Nagar/);
+  assert.match(h.toUser()[0].text, /^I do not have an exact match for 3 bedroom residential in Anna Nagar/);
 });
 
 test('a clarifying question may repeat the number the customer typed, with any unit', () => {
@@ -639,7 +639,7 @@ test('a promised confirm button is sent by re-running the turn with that tool fo
   assert.equal(calls.length, 2);
   assert.deepEqual(calls[1].prepareStep({ stepNumber: 0 }), { toolChoice: { type: 'tool', toolName: 'request_site_visit' } });
   assert.ok(h.toUser().some((m) => /Would you like to visit/.test(m.text) && buttons(m).includes('action:visit:p16')), 'the confirm button was sent');
-  assert.match(h.toUser().at(-1).text, /Confirm site visit/);
+  assert.ok(h.toUser().some((m) => m.text === 'Tap the "Confirm site visit" button to request it.'));
 });
 
 test('if no button can be sent, the promise to send one is removed', async () => {
@@ -686,14 +686,14 @@ test('a listing with one photo has no gallery row; one with none stays a text ca
   const none = harness({ generate: searchNavalur });
   await none.send(say('2BHK in OMR'));
   assert.equal(none.sent('sendPhoto').length, 0);
-  assert.match(none.toUser()[0].text, /High-Rise 2BHK Apartment/);
+  assert.match(none.toUser()[1].text, /High-Rise 2BHK Apartment/);
 });
 
 test('if Telegram cannot fetch the photo, the card is still sent as text', async () => {
   const h = harness({ generate: searchNavalur, tables: { property_photos: photoRows('p04', 2) }, failMethod: 'sendPhoto' });
   await h.send(say('2BHK in OMR'));
-  assert.match(h.toUser()[0].text, /High-Rise 2BHK Apartment/);
-  assert.deepEqual(buttons(h.toUser()[0]), ['action:visit:p04', 'action:save:p04']);
+  assert.match(h.toUser()[1].text, /High-Rise 2BHK Apartment/);
+  assert.deepEqual(buttons(h.toUser()[1]), ['action:visit:p04', 'action:save:p04']);
 });
 
 test('the arrows swap the photo in place, keep the caption, and wrap around', async () => {
@@ -779,7 +779,7 @@ test('before the photos table exists, searches and /saved still work as text car
 
   await h.send(say('2BHK in OMR'));
   assert.equal(h.sent('sendPhoto').length, 0);
-  assert.match(h.toUser()[0].text, /High-Rise 2BHK Apartment/);
+  assert.match(h.toUser()[1].text, /High-Rise 2BHK Apartment/);
 
   await addToShortlist(h.supabase, ID, 'p03');
   await h.send(say('/saved'));
@@ -839,7 +839,7 @@ test('talk of photos is removed when nothing in play has any', async () => {
     return { text: 'This one is available. Would you like to see photos or book a visit?' };
   } });
   await h.send(say('1BHK in Tambaram'));
-  assert.equal(h.toUser().at(-1).text, 'This one is available.');
+  assert.equal(h.toUser()[0].text, 'This one is available.');
 });
 
 test('"tap the card" is removed, because the card itself is not tappable', () => {
@@ -943,4 +943,32 @@ test('a unit the model guessed is rejected when the amount is not believable for
   assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
   const lead = await getLead(h.supabase, ID);
   assert.ok(!lead.keyPoints.some((k) => /Offered/.test(k.text)), 'no made-up amount is recorded');
+});
+
+test('the reply text arrives before the cards, and the cards still arrive if the reply fails', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ location: 'Tambaram', category: 'residential' }, toolCall);
+      return { text: 'This is the only one near Tambaram.' };
+    }
+  });
+  await h.send(say('1BHK in Tambaram'));
+  const sent = h.toUser();
+  assert.equal(sent[0].text, 'This is the only one near Tambaram.');
+  assert.match(sent[1].text, /Compact 1BHK Starter Flat/);
+
+  const failing = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ location: 'Tambaram', category: 'residential' }, toolCall);
+      throw new Error('model timed out');
+    }
+  });
+  await failing.send(say('1BHK in Tambaram'));
+  assert.ok(failing.toUser().some((m) => /Compact 1BHK Starter Flat/.test(m.text)), 'the results are not lost');
+});
+
+test('wording that assumes the cards are already on screen is corrected, because the reply comes first', () => {
+  assert.equal(cardsFollow('No other listings match, I showed the only available card.'), 'No other listings match, I am showing the only available card.');
+  assert.equal(cardsFollow('Please see the details in the cards above.'), 'Please see the details in the cards below.');
+  assert.equal(cardsFollow('Here are the options.'), 'Here are the options.');
 });

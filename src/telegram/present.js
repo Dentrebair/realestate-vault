@@ -25,23 +25,33 @@ export async function sendCard(api, chatId, view, { saved = false, photos = [] }
   });
 }
 
-export async function sendSearchResult({ api, supabase, chatId, result, lead }) {
+// Loads photos and returns the cards to show, plus a function that sends them. Splitting the two lets the reply text
+// go out first, so the customer reads it before the cards.
+export async function prepareSearchResult({ api, supabase, chatId, result, lead }) {
   const saved = new Set(lead?.shortlistedPropertyIds ?? []);
   const views = result.results.length ? result.results : result.recommendations;
   const photos = await loadPhotos(supabase, views.map((v) => v.id)).catch((error) => {
     log('photos_unavailable', { error: error.message }, 'error');
     return new Map();
   });
+  for (const view of views) view.photoCount = photos.get(view.id)?.length ?? 0;
 
-  for (const view of views) {
-    view.photoCount = photos.get(view.id)?.length ?? 0;
-    await sendCard(api, chatId, view, { saved: saved.has(view.id), photos: photos.get(view.id) ?? [] });
-  }
-  if (result.nextOffset !== null && result.nextOffset !== undefined) {
-    await api.sendMessage(chatId, `Showing ${result.nextOffset} of ${result.totalMatches}.`, {
-      reply_markup: moreKeyboard()
-    });
-  }
+  const send = async () => {
+    for (const view of views) {
+      await sendCard(api, chatId, view, { saved: saved.has(view.id), photos: photos.get(view.id) ?? [] });
+    }
+    if (result.nextOffset !== null && result.nextOffset !== undefined) {
+      await api.sendMessage(chatId, `Showing ${result.nextOffset} of ${result.totalMatches}.`, {
+        reply_markup: moreKeyboard()
+      });
+    }
+  };
+  return { views, send };
+}
+
+export async function sendSearchResult(args) {
+  const { views, send } = await prepareSearchResult(args);
+  await send();
   return views;
 }
 

@@ -104,6 +104,7 @@ export async function handleText(ctx, deps) {
     const turn = await runAgentTurn({ deps: deps.agent, supabase, api, chatId, lead, history, text });
 
     await ctx.reply(turn.text);
+    await turn.sendCards?.();
     await saveMessage(supabase, customerId, 'assistant', turn.text, { shown: turn.shown.map((s) => s.id) });
     log('turn', { customerId, ms: Date.now() - started, blocked: turn.blocked, usage: turn.usage });
   } catch (error) {

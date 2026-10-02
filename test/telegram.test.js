@@ -4,7 +4,7 @@ import request from 'supertest';
 import { createApp } from '../src/app.js';
 import { addToShortlist, getLead, setBotState, upsertLeadMemory } from '../src/leadMemory.js';
 import { claimsVisitButton, guardAmounts, mentionUnavailable, moneyHint, withoutBackstage, withoutCardTapping, cardsFollow, withoutDashes, withoutPhantomButtons, withoutPhotoClaims } from '../src/telegram/agent.js';
-import { asksAboutPhotos, isNegotiation } from '../src/telegram/intent.js';
+import { asksAboutPhotos, isNegotiation, wantsRental } from '../src/telegram/intent.js';
 import { ruleVerdict } from '../src/telegram/negotiation.js';
 import { buildInstructions } from '../src/telegram/systemPrompt.js';
 import { createBot } from '../src/telegram/bot.js';
@@ -1025,4 +1025,20 @@ test('"anything else" skips the shown property but still shows the others that f
   const cards = h.toUser().slice(1).map((m) => m.text).join('\n');
   assert.doesNotMatch(cards, /High-Rise 2BHK Apartment/);
   assert.match(cards, /Compact 1BHK Starter Flat/);
+});
+
+test('rental requests get the fixed "we only sell" reply without a search; investor questions are untouched', async () => {
+  for (const yes of ['2BHK for rent in Velachery', 'I want to rent a flat', 'looking for a house on lease', 'any rental flats near OMR', 'PG near Tidel Park', 'need an office for lease']) {
+    assert.equal(wantsRental(yes), true, yes);
+  }
+  for (const no of ['what is the rental yield on this', 'is there a current tenant', 'monthly rental income?', 'show me 2BHK in Velachery', 'I want to buy a flat', 'what is the rent collection']) {
+    assert.equal(wantsRental(no), false, no);
+  }
+
+  let asked = 0;
+  const h = harness({ generate: async () => (asked++, { text: 'Here are rentals.' }) });
+  await h.send(say('2BHK for rent in Velachery'));
+  assert.equal(asked, 0, 'the model is not asked');
+  assert.equal(h.toUser().length, 1);
+  assert.match(h.toUser()[0].text, /^We only sell properties/);
 });

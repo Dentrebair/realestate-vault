@@ -42,3 +42,13 @@ export function offeredAmount(text) {
   if (money.approximate) return Math.round((money.min + money.max) / 2);
   return money.max ?? money.min ?? null;
 }
+
+// Someone who wants to rent or lease. We only sell. Questions about a listing's rental income or yield are not this.
+const RENTAL_ASPECT = /\b(yield|roi|returns?|income|tenants?|tenanted|collection|lock[- ]?in|rental (?:history|status))\b/i;
+const WANTS_RENT =
+  /\b(?:for|on|to|want to|wanna|looking to|need to|can i|let me)\s+(?:rent|lease|rental)\b|\b(?:rent|lease|rent out|lease out)\s+(?:a|an|the|my|any)?\s*(?:\d\s*bhk|flat|house|home|apartment|villa|office|shop|place|property|room|plot|warehouse)\b|\b(?:rent|lease)\s+(?:in|near|at|around)\b|\brentals?\s+(?:flats?|houses?|homes?|apartments?|villas?|propert(?:y|ies)|options?|offices?|shops?)\b|\bpg\b|\bpaying guest\b|\bon (?:rent|lease)\b/i;
+
+export function wantsRental(text) {
+  const t = String(text ?? '');
+  return WANTS_RENT.test(t) && !RENTAL_ASPECT.test(t);
+}

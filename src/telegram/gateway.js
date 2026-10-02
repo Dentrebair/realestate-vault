@@ -11,7 +11,7 @@ import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { photosAnswer, PHOTOS_GENERAL } from './copy.js';
 import { DEFAULT_REPLIES, fieldAnswer, hasSearchIntent, isQuestion, topicOf } from './facts.js';
-import { asksAboutPhotos, isNegotiation, isPriceOffer, offeredAmount } from './intent.js';
+import { asksAboutPhotos, isNegotiation, isPriceOffer, offeredAmount, wantsRental } from './intent.js';
 
 const STATUS_WORDS = { available: 'Available', under_construction: 'Under construction', reserved: 'Reserved', sold: 'Sold' };
 const ORDINALS = { first: 0, '1st': 0, second: 1, '2nd': 1, third: 2, '3rd': 2, fourth: 3, '4th': 3, fifth: 4, '5th': 4 };
@@ -60,6 +60,8 @@ const findEntry = (supabase, query) => findStoredEntry(supabase, query).catch(()
 const which = (shown) =>
   `Which one do you mean? ${shown.map((p, i) => `${i + 1}) ${p.title}`).join('; ')}. You can say "the first one" or "number 2".`;
 
+const ONLY_SALES = 'We only sell properties, so I cannot help with rentals or leases. If you are open to buying, tell me the area, your budget and the kind of property, and I will find options.';
+
 export async function answerFromData({ text, lead, supabase, config: given = appConfig, intent = null }) {
   // Callers may pass only the settings they care about; anything missing comes from the app's own settings.
   const config = { ...appConfig, ...given };
@@ -71,6 +73,9 @@ export async function answerFromData({ text, lead, supabase, config: given = app
     const found = shown.length ? await loadPhotos(supabase, shown.map((p) => p.id)).catch(() => new Map()) : new Map();
     return { reply: shown.length ? photosAnswer(shown.map((p) => ({ title: p.title, count: found.get(p.id)?.length ?? 0 }))) : PHOTOS_GENERAL };
   }
+
+  // ---- we only sell: no search, no cards ----
+  if (wantsRental(t)) return { reply: ONLY_SALES };
 
   // ---- an offer on a property in play ("can i get for 54L"): not a search, and not a price we can agree ----
   const offer = intent ? intent.offer : isPriceOffer(t, shown) ? offeredAmount(t) : null;

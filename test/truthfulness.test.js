@@ -248,8 +248,8 @@ test('none of the 50 test leads\' own messages is taken over by the gateway', as
   for (const lead of testLeads) {
     for (const message of lead.messages) {
       if (message.startsWith('/')) continue;
-      // Lead 005 proposes a visit time, and 048 asks a price; the gateway answers both on purpose.
-      if (lead.id === 'test:005' || lead.id === 'test:048') continue;
+      // Lead 005 proposes a visit time, 048 asks a price and 047 asks to rent; the gateway answers all three on purpose.
+      if (['test:005', 'test:047', 'test:048'].includes(lead.id)) continue;
       if (await ask(db, message, [])) intercepted.push(`${lead.id}: ${message}`);
     }
   }

@@ -38,7 +38,9 @@ export function createApp({
       ok: true,
       service: 'real-estate-meta-business-agent-connector',
       supabaseConfigured: isSupabaseConfigured,
-      telegramConfigured: Boolean(telegramBot)
+      telegramConfigured: Boolean(telegramBot),
+      // Which commit is running, so a deploy that did not pick up the latest code is easy to spot.
+      commit: (process.env.RAILWAY_GIT_COMMIT_SHA ?? '').slice(0, 7) || undefined
     });
   });
 

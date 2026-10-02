@@ -4,12 +4,14 @@
 // then "I do not have that", which is saved as a knowledge gap so an owner can fill it.
 import { config as appConfig } from '../config.js';
 import { findEntry as findStoredEntry, markServed, recordGap } from '../knowledge.js';
-import { locateProperty, resolveArea } from '../microMarkets.js';
+import { upsertLeadMemory } from '../leadMemory.js';
+import { locateProperty, normalize, resolveArea } from '../microMarkets.js';
+import { POR_LABEL, formatInr, priceDisplay } from '../money.js';
 import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { photosAnswer, PHOTOS_GENERAL } from './copy.js';
 import { DEFAULT_REPLIES, fieldAnswer, hasSearchIntent, isQuestion, topicOf } from './facts.js';
-import { asksAboutPhotos } from './intent.js';
+import { asksAboutPhotos, isNegotiation, isPriceOffer, offeredAmount } from './intent.js';
 
 const STATUS_WORDS = { available: 'Available', under_construction: 'Under construction', reserved: 'Reserved', sold: 'Sold' };
 const ORDINALS = { first: 0, '1st': 0, second: 1, '2nd': 1, third: 2, '3rd': 2, fourth: 3, '4th': 3, fifth: 4, '5th': 4 };
@@ -36,13 +38,31 @@ export function referenced(text, shown) {
   return shown.length === 1 ? { property: shown[0] } : { ambiguous: shown };
 }
 
+// The listing a customer names in their own words ("High-Rise 2BHK Apartment near omr", "the Alwarpet bungalow").
+// Returns it only when one listing is clearly the best match.
+const NAME_STOP = new Set(['price', 'cost', 'rate', 'what', 'the', 'how', 'much', 'for', 'near', 'and', 'with', 'tell', 'about', 'can', 'get', 'please', 'chennai', 'asking', 'listed', 'its', 'whats']);
+const nameTokens = (text) => normalize(text).split(' ').filter((w) => w.length >= 3 && !NAME_STOP.has(w));
+
+export async function findByName(supabase, text, table) {
+  const { data, error } = await supabase.from(table).select('property_id,title,location,status,price_inr,metadata').limit(1000);
+  if (error) throw error;
+  const wanted = new Set(nameTokens(text));
+  const scored = data
+    .map((row) => ({ row, score: new Set(nameTokens(`${row.title} ${row.location}`)).size && [...new Set(nameTokens(`${row.title} ${row.location}`))].filter((w) => wanted.has(w)).length }))
+    .sort((a, b) => b.score - a.score);
+  const [best, second] = scored;
+  return best && best.score >= 2 && best.score > (second?.score ?? 0) ? best.row : null;
+}
+
 // Before the knowledge tables exist, or if they are unreachable, there are simply no approved answers.
 const findEntry = (supabase, query) => findStoredEntry(supabase, query).catch(() => null);
 
 const which = (shown) =>
   `Which one do you mean? ${shown.map((p, i) => `${i + 1}) ${p.title}`).join('; ')}. You can say "the first one" or "number 2".`;
 
-export async function answerFromData({ text, lead, supabase, config = appConfig }) {
+export async function answerFromData({ text, lead, supabase, config: given = appConfig }) {
+  // Callers may pass only the settings they care about; anything missing comes from the app's own settings.
+  const config = { ...appConfig, ...given };
   const shown = lead.botState?.shown ?? [];
   const t = String(text ?? '');
 
@@ -50,6 +70,49 @@ export async function answerFromData({ text, lead, supabase, config = appConfig 
   if (asksAboutPhotos(t)) {
     const found = shown.length ? await loadPhotos(supabase, shown.map((p) => p.id)).catch(() => new Map()) : new Map();
     return { reply: shown.length ? photosAnswer(shown.map((p) => ({ title: p.title, count: found.get(p.id)?.length ?? 0 }))) : PHOTOS_GENERAL };
+  }
+
+  // ---- an offer on a property in play ("can i get for 54L"): not a search, and not a price we can agree ----
+  if (isPriceOffer(t, shown)) {
+    const ref = referenced(t, shown);
+    if (ref.ambiguous) return { reply: which(ref.ambiguous) };
+    const found = ref.property ? await getProperty(supabase, ref.property.id) : null;
+    if (found) {
+      const amount = offeredAmount(t);
+      const listed = found.row.price_inr == null ? `as ${POR_LABEL}` : `at ${priceDisplay(found.row.price_inr)}`;
+      await upsertLeadMemory(
+        supabase,
+        {
+          customerId: lead.customerId,
+          keyPoints: [{ type: 'negotiation', text: `Offered ${formatInr(amount)} for ${found.row.title} (listed ${listed.replace(/^(as|at) /, '')})`, confidence: 1 }],
+          nextAction: 'sales team to discuss a price offer'
+        },
+        { actor: 'system' }
+      ).catch(() => {});
+      return {
+        reply: `I cannot agree a price or a discount. ${found.row.title} is listed ${listed}. Pricing is handled by our sales team: request a site visit and they can discuss your offer of ${formatInr(amount)}.`,
+        visitFor: found.row.property_id
+      };
+    }
+  }
+
+  // ---- "what is the price of X": answer it, naming the listing, and show it if it is not already on screen ----
+  if (/\b(price|cost|how much|asking)\b/i.test(t) && isQuestion(t) && !isNegotiation(t) && !/\b(per sq|market|average|trend|forecast|appreciat\w*|worth it)\b/i.test(t)) {
+    const named = await findByName(supabase, t, config.propertiesTable).catch(() => null);
+    let row = named;
+    if (!row && !hasSearchIntent(t)) {
+      const ref = referenced(t, shown);
+      if (ref.ambiguous) return { reply: which(ref.ambiguous) };
+      if (ref.property) row = (await getProperty(supabase, ref.property.id))?.row ?? null;
+    }
+    if (row) {
+      const price = row.price_inr == null ? `listed as ${POR_LABEL}` : `${priceDisplay(row.price_inr)}`;
+      const status = ['sold', 'reserved'].includes(row.status) ? ` It is currently ${row.status}.` : '';
+      return {
+        reply: row.price_inr == null ? `${row.title} is ${price}.${status}` : `The listed price of ${row.title} is ${price}.${status}`,
+        cardFor: shown.some((p) => p.id === row.property_id) ? null : row.property_id
+      };
+    }
   }
 
   if (/\b(office|working|business|opening|open) (hours|timings?)\b|\bwhen (are|will) you (be )?(open|available)\b|\bwhat time (do|are) you\b/i.test(t)) {

@@ -2,13 +2,15 @@
 import { setBotState, setStage } from '../leadMemory.js';
 import { runAgentTurn } from './agent.js';
 import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, RATE_LIMITED, TOO_LONG } from './copy.js';
+import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { visitPrompt } from './cards.js';
 import { answerFromData } from './gateway.js';
+import { rememberShown, sendCard } from './present.js';
 import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
 import { consentPrompt, needsConsent } from './consent.js';
-import { isNegotiation } from './intent.js';
+import { isNegotiation, isPriceOffer } from './intent.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { failureAlert, notifySales } from './sales.js';
 import { scopeOf } from './scope.js';
@@ -52,10 +54,12 @@ export async function handleText(ctx, deps) {
   }
 
   // Asking for a discount is negotiation whether or not the model notices. Code does not rely on it.
-  if (isNegotiation(text)) {
+  // So is an offer on a property in play ("can i get for 54L").
+  const offered = isPriceOffer(text, lead.botState?.shown ?? []);
+  if (isNegotiation(text) || offered) {
     await setStage(supabase, customerId, 'negotiating', {
       actor: 'system',
-      reason: 'asked about price or a discount'
+      reason: offered ? 'made a price offer' : 'asked about price or a discount'
     }).catch((error) => log('stage_failed', { customerId, error: error.message }, 'error'));
   }
 
@@ -67,6 +71,17 @@ export async function handleText(ctx, deps) {
       await saveMessage(supabase, customerId, 'user', text);
       await ctx.reply(answered.reply);
       await saveMessage(supabase, customerId, 'assistant', answered.reply);
+      if (answered.cardFor) {
+        const found = await getProperty(supabase, answered.cardFor);
+        if (found) {
+          const photos = (await loadPhotos(supabase, [found.row.property_id]).catch(() => new Map())).get(found.row.property_id) ?? [];
+          await sendCard(api, chatId, { ...found.view, kind: 'match', photoCount: photos.length }, {
+            saved: (lead.shortlistedPropertyIds ?? []).includes(found.row.property_id),
+            photos
+          });
+          await setBotState(supabase, customerId, { shown: rememberShown([{ ...found.view, photoCount: photos.length }]) });
+        }
+      }
       if (answered.visitFor) {
         const found = await getProperty(supabase, answered.visitFor);
         if (found) {

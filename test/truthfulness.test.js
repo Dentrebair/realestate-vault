@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { findMatches } from '../src/matching.js';
 import { answerFromData } from '../src/telegram/gateway.js';
+import { isNegotiation, isPriceOffer, offeredAmount } from '../src/telegram/intent.js';
 import { narrateSearch } from '../src/telegram/narrate.js';
 import { withoutImpossibleOffers, withoutKnowledgeClaims, withoutUnlistedPlaces, truthful } from '../src/telegram/truthguard.js';
 import { answerGap, dismissGap, findEntry, listGapGroups, recordGap, relevantEntries } from '../src/knowledge.js';
@@ -247,8 +248,8 @@ test('none of the 50 test leads\' own messages is taken over by the gateway', as
   for (const lead of testLeads) {
     for (const message of lead.messages) {
       if (message.startsWith('/')) continue;
-      // Lead 005 proposes a visit time; the gateway answers that on purpose, with a confirm button.
-      if (lead.id === 'test:005') continue;
+      // Lead 005 proposes a visit time, and 048 asks a price; the gateway answers both on purpose.
+      if (lead.id === 'test:005' || lead.id === 'test:048') continue;
       if (await ask(db, message, [])) intercepted.push(`${lead.id}: ${message}`);
     }
   }
@@ -317,4 +318,69 @@ test('the line about what the team can do is a setting, so it only says what is 
   const db = createFakeSupabase({ properties });
   const custom = await answerFromData({ text: 'Does it have parking?', lead: leadWith(shownOf('p03')), supabase: db, config: { ...CONFIG, teamConfirmLine: 'Ask us at the sales office.' } });
   assert.equal(custom.reply, 'The listing for Signature 4BHK Sky Mansion does not mention parking. Ask us at the sales office.');
+});
+
+// ---- price questions and price offers ---------------------------------------------------------
+
+test('an offer on a property in play is recognised; a search or a budget is not', () => {
+  const shown = shownOf('p04');
+  for (const yes of ['can i get for 54L', 'Can I get it for 54 lakh?', 'will you take 55 lakh', 'how about 58L', 'my offer is 55 lakhs', 'what about 54L', '54L?', 'could you do 5800000']) {
+    assert.equal(isPriceOffer(yes, shown), true, yes);
+  }
+  for (const no of [
+    'can i get a 2BHK for 54L', 'show me homes under 54L', 'budget 54L in OMR', 'under 54L', 'around 60L', 'flat in Anna Nagar for 54L',
+    'what is the price', 'can i get for 54', 'I need a house', 'is it available'
+  ]) {
+    assert.equal(isPriceOffer(no, shown), false, no);
+  }
+  assert.equal(isPriceOffer('can i get for 54L', []), false, 'with nothing in play there is nothing to make an offer on');
+  assert.equal(offeredAmount('can i get for 54L'), 5400000);
+  assert.equal(offeredAmount('how about 58L'), 5800000);
+  assert.equal(isNegotiation('what is the price'), false, 'asking a price is not negotiating');
+});
+
+test('"price of X" is answered with the price, naming the listing, and X is shown if it was not on screen', async () => {
+  const db = createFakeSupabase({ properties });
+  const named = await ask(db, 'price of High-Rise 2BHK Apartment near omr ?', []);
+  assert.equal(named.reply, 'The listed price of High-Rise 2BHK Apartment near Tech Parks is ₹62 L.');
+  assert.equal(named.cardFor, 'p04');
+
+  const already = await ask(db, 'what is the price of the High-Rise 2BHK apartment', shownOf('p04'));
+  assert.equal(already.cardFor, null, 'no repeat card when it is already on screen');
+
+  const por = await ask(db, 'What is the price of the Alwarpet bungalow?', []);
+  assert.equal(por.reply, 'Heritage Residential Bungalow (Land Value Sale) is listed as Price on Request (POR).');
+
+  const sold = await ask(db, 'how much is the Besant Nagar penthouse', []);
+  assert.match(sold.reply, /The listed price of Exclusive Rooftop Penthouse with Ocean Vista is ₹6.5 Cr\. It is currently sold\./);
+
+  const second = await ask(db, 'how much is the second one', shownOf('p03', 'p04'));
+  assert.equal(second.reply, 'The listed price of High-Rise 2BHK Apartment near Tech Parks is ₹62 L.');
+  assert.match((await ask(db, 'how much is it', shownOf('p03', 'p04'))).reply, /^Which one do you mean\?/);
+});
+
+test('price questions that are really about negotiation or the market are left to the right handler', async () => {
+  const db = createFakeSupabase({ properties });
+  assert.equal(await ask(db, 'Is the Medavakkam plot price negotiable?', shownOf('p11')), null, 'negotiation goes on to the model');
+  const market = await ask(db, 'What is the average price per sq ft in Anna Nagar?', shownOf('p03'));
+  assert.match(market.reply, /^I do not have area guides, market data or forecasts/);
+  assert.equal(await ask(db, 'show me flats under 60 lakh price', shownOf('p03')), null);
+});
+
+test('an offer is not agreed: the listed price is stated, the offer is noted for sales, and a visit is offered', async () => {
+  const db = createFakeSupabase({ properties });
+  await db.from('customer_leads').insert({ customer_id: 'telegram:9', lead_stage: 'interested' });
+  const offer = await ask(db, 'can i get for 54L', shownOf('p04'));
+  assert.equal(
+    offer.reply,
+    'I cannot agree a price or a discount. High-Rise 2BHK Apartment near Tech Parks is listed at ₹62 L. Pricing is handled by our sales team: request a site visit and they can discuss your offer of ₹54 L.'
+  );
+  assert.equal(offer.visitFor, 'p04');
+  const lead = db.tables.customer_leads.find((l) => l.customer_id === 'telegram:9');
+  assert.deepEqual(lead.key_points.map((k) => k.text), ['Offered ₹54 L for High-Rise 2BHK Apartment near Tech Parks (listed ₹62 L)']);
+  assert.equal(lead.next_action, 'sales team to discuss a price offer');
+
+  const por = await ask(db, 'will you take 50 lakh', shownOf('p05'));
+  assert.match(por.reply, /Heritage Residential Bungalow \(Land Value Sale\) is listed as Price on Request \(POR\)\./);
+  assert.match((await ask(db, 'how about 58L', shownOf('p03', 'p04'))).reply, /^Which one do you mean\?/);
 });

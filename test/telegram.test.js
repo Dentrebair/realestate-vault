@@ -650,6 +650,8 @@ test('if no button can be sent, the promise to send one is removed', async () =>
 
 // ---- photos -------------------------------------------------------------------------------
 
+const shownFor = (...ids) => ids.map((id) => { const p = properties.find((x) => x.property_id === id); return { id, title: p.title, location: p.location, priceDisplay: '₹x', photoCount: 0 }; });
+
 const photoRows = (propertyId, count) =>
   Array.from({ length: count }, (_, i) => ({ id: i + 1, property_id: propertyId, path: `${propertyId}/photo-${i}.jpg`, position: i }));
 
@@ -843,4 +845,39 @@ test('"tap the card" is removed, because the card itself is not tappable', () =>
   assert.equal(withoutCardTapping('I found one 1BHK. Tap the card to see details. Want a site visit?'), 'I found one 1BHK. Want a site visit?');
   assert.equal(withoutCardTapping('Tap Book Site Visit under the card to request a visit.'), 'Tap Book Site Visit under the card to request a visit.');
   assert.equal(withoutCardTapping('Listings have images in their cards, tap a card to view them.'), '');
+});
+
+test('an offer on the property just shown moves the lead to negotiating, and the model is not asked', async () => {
+  let asked = 0;
+  const h = harness({ generate: async () => (asked++, { text: 'x' }) });
+  await seedLead(h, { budgetMax: 7000000 }, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+
+  await h.send(say('can i get for 54L'));
+
+  assert.equal(asked, 0);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
+  const move = h.rows('lead_events').find((e) => e.event_type === 'stage_changed' && e.to_stage === 'negotiating');
+  assert.equal(move.note, 'made a price offer');
+  assert.match(h.toUser().find((m) => /cannot agree a price/.test(m.text)).text, /listed at ₹62 L/);
+  assert.ok(h.toUser().some((m) => /Would you like to visit/.test(m.text) && buttons(m).includes('action:visit:p04')), 'a visit button is offered');
+  const lead = await getLead(h.supabase, ID);
+  assert.ok(lead.keyPoints.some((k) => /Offered ₹54 L/.test(k.text)));
+});
+
+test('asking a price answers it, shows the card, and does not call it negotiation', async () => {
+  let asked = 0;
+  const h = harness({ generate: async () => (asked++, { text: 'x' }) });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic' });
+
+  await h.send(say('price of High-Rise 2BHK Apartment near omr ?'));
+
+  assert.equal(asked, 0);
+  const sent = h.toUser();
+  assert.equal(sent[0].text, 'The listed price of High-Rise 2BHK Apartment near Tech Parks is ₹62 L.');
+  assert.match(sent[1].text, /High-Rise 2BHK Apartment near Tech Parks/);
+  assert.deepEqual(buttons(sent[1]), ['action:visit:p04', 'action:save:p04']);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'interested', 'a price question is interest, not negotiation');
+  assert.deepEqual((await getLead(h.supabase, ID)).botState.shown.map((p) => p.id), ['p04']);
 });

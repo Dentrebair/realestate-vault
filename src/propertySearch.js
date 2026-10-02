@@ -55,11 +55,18 @@ export async function searchProperties(supabase, filters) {
     throw error;
   }
 
-  const found = findMatches(data, filters);
+  // "Anything else?" leaves out what the customer was just shown. If that leaves nothing but the listing was
+  // there, the answer is "that is the only one", never the same card again.
+  const skip = new Set(filters.excludeIds ?? []);
+  let found = findMatches(skip.size ? data.filter((row) => !skip.has(row.property_id)) : data, filters);
+  if (skip.size && !found.matches.length && !found.recommendations.length) {
+    const all = findMatches(data, filters);
+    if (all.matches.length || all.recommendations.length) found = { ...found, outcome: 'only_already_shown' };
+  }
   const page = found.matches.slice(filters.offset, filters.offset + filters.limit);
   const next = filters.offset + filters.limit;
 
-  if (filters.customerId && found.outcome !== 'matches') {
+  if (filters.customerId && found.outcome !== 'matches' && found.outcome !== 'only_already_shown') {
     await recordUnmetDemand(supabase, filters.customerId, found);
   }
 

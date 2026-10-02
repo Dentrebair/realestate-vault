@@ -52,6 +52,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
         minBudget: money.optional(),
         maxBudget: money.optional(),
         ignoreSavedBudget: z.boolean().optional().describe('True only if the customer says the saved budget no longer applies'),
+        excludeShown: z.boolean().optional().describe('True when the customer wants something other than the cards already shown: "anything else", "apart from this", "other options"'),
         offset: z.number().int().min(0).optional()
       }),
       execute: async (input) => record(await searchTool({ input, supabase, api, chatId, lead, state }))
@@ -344,6 +345,7 @@ async function searchTool({ input, supabase, api, chatId, lead, state }) {
     customerId: lead.customerId,
     limit: 5,
     offset: given.offset ?? 0,
+    excludeIds: given.excludeShown ? state.shown.map((p) => p.id) : undefined,
     location: given.location,
     query: given.query,
     category: given.category,
@@ -378,7 +380,7 @@ async function searchTool({ input, supabase, api, chatId, lead, state }) {
   state.unavailable = result.unavailable;
   state.narration = narrateSearch(result);
 
-  const { customerId: _omit, offset: _offset, limit: _limit, ...remembered } = filters;
+  const { customerId: _omit, offset: _offset, limit: _limit, excludeIds: _skip, ...remembered } = filters;
   await setBotState(supabase, lead.customerId, {
     shown: state.shown,
     lastSearch: { filters: remembered, nextOffset: result.nextOffset }

@@ -972,3 +972,57 @@ test('wording that assumes the cards are already on screen is corrected, because
   assert.equal(cardsFollow('Please see the details in the cards above.'), 'Please see the details in the cards below.');
   assert.equal(cardsFollow('Here are the options.'), 'Here are the options.');
 });
+
+test('when the only listing that fits was just shown, "anything else" says so instead of repeating it', async () => {
+  const one = properties.filter((p) => p.property_id === 'p16');
+  const h = harness({
+    tables: { properties: one },
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ location: 'Tambaram', category: 'residential', excludeShown: true }, toolCall);
+      return { text: 'Here you go.' };
+    }
+  });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p16') });
+
+  await h.send(say('anything apart from this'));
+
+  const sent = h.toUser();
+  assert.equal(sent.length, 1, 'no card is sent');
+  assert.match(sent[0].text, /The one I showed is the only listing that fits/);
+  assert.equal(h.rows('lead_events').filter((e) => e.event_type === 'zero_result').length, 0, 'not counted as unmet demand');
+});
+
+test('"anything else" near the same area offers a different close option, never the card just shown', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ location: 'Tambaram', category: 'residential', excludeShown: true }, toolCall);
+      return { text: 'Here you go.' };
+    }
+  });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p16') });
+
+  await h.send(say('anything apart from this'));
+
+  const cards = h.toUser().slice(1).map((m) => m.text).join('\n');
+  assert.ok(cards.length > 0, 'a different option is offered');
+  assert.doesNotMatch(cards, /Compact 1BHK Starter Flat/);
+});
+
+test('"anything else" skips the shown property but still shows the others that fit', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ category: 'residential', excludeShown: true }, toolCall);
+      return { text: 'Here are some others.' };
+    }
+  });
+  await seedLead(h, { budgetMax: L(70) });
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+
+  await h.send(say('show me something else'));
+
+  const cards = h.toUser().slice(1).map((m) => m.text).join('\n');
+  assert.doesNotMatch(cards, /High-Rise 2BHK Apartment/);
+  assert.match(cards, /Compact 1BHK Starter Flat/);
+});

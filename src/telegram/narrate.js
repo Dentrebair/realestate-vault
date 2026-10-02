@@ -25,6 +25,9 @@ export function narrateSearch(result) {
       }
       break;
     }
+    case 'only_already_shown':
+      main = `The one I showed is the only listing that fits ${c.summary}. I have nothing else to show you right now. Would you like to change the area, the budget or the type of property?`;
+      break;
     case 'nothing_in_budget': {
       const over = result.droppedOverBudget.map((p) => `${p.title} at ${p.priceDisplay}`);
       main = `There are properties in ${c.area ?? 'that area'}, but all are well above your budget: ${list(over)}. Could the budget stretch, or would you like to look in another area?`;

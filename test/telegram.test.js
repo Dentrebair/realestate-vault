@@ -1062,3 +1062,13 @@ test('/start does not change the stage of a returning lead', async () => {
   await h.send(say('/start'));
   assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
 });
+
+test('the router accepts a topic by key or description, and rejects an unknown label', async () => {
+  const { routeMessage } = await import('../src/telegram/router.js');
+  const said = (text) => ({ generate: async () => ({ text }), model: {} });
+  assert.deepEqual(await routeMessage({ text: 'x', deps: said('{"label":"topic","topic":"approvals and title"}') }), { label: 'topic', topic: 'approvals' });
+  assert.deepEqual(await routeMessage({ text: 'x', deps: said('{"label":"contact","topic":null}') }), { label: 'topic', topic: 'contact' });
+  assert.deepEqual(await routeMessage({ text: 'x', deps: said('{"label":"count","topic":null}') }), { label: 'count', topic: null });
+  assert.equal(await routeMessage({ text: 'x', deps: said('{"label":"nonsense"}') }), null);
+  assert.equal(await routeMessage({ text: 'x', deps: { generate: async () => { throw new Error('timeout'); }, model: {} } }), null);
+});

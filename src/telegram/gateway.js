@@ -60,6 +60,21 @@ const findEntry = (supabase, query) => findStoredEntry(supabase, query).catch(()
 const which = (shown) =>
   `Which one do you mean? ${shown.map((p, i) => `${i + 1}) ${p.title}`).join('; ')}. You can say "the first one" or "number 2".`;
 
+// The rules that decide what a message is about. Named so the router eval can measure exactly these.
+const HOURS = /\b(office|working|business|opening|open) (hours|timings?)\b|\bwhen (are|will) you (be )?(open|available)\b|\bwhat time (do|are) you\b/i;
+const HUMAN = /\b(real (person|human)|am i (talking|speaking|chatting) to|are you (a |an )?(bot|robot|human|real|ai|person|machine))\b/i;
+const VISIT_TIME = /\b(visit|see|view|come|drop by|tour)\b[^.?!]*\b(tomorrow|today|tonight|weekend|saturday|sunday|monday|tuesday|wednesday|thursday|friday|\d{1,2}(:\d\d)?\s?(am|pm)|at \d)\b/i;
+const COMPARE = /\bwhich\b[^.?!]*\b(is|are|would be)\b[^.?!]*\b(better|best)\b|\bwhich (one )?(would|should) (you|i)\b|\b(do )?you recommend\b|\bbetter of the\b|\bcompare\b/i;
+export const asksPrice = (t) => /\b(price|cost|how much|asking)\b/i.test(t) && isQuestion(t) && !/\b(per sq|market|average|trend|forecast|appreciat\w*|worth it)\b/i.test(t);
+export const asksCount = (t) => /\bhow many\b[^.?!]*\b(propert\w+|listings?|flats?|homes?|plots?|options|units)\b/i.test(t) && !hasSearchIntent(t.replace(/how many/i, ''));
+export const asksAvailability = (t) => /\b(still |currently )?(available|vacant|sold|taken|on sale)\b/i.test(t) && isQuestion(t) && !hasSearchIntent(t);
+export const asksOtherCity = (t) => CITIES.test(t) && (isQuestion(t) || /\bdo you have\b/i.test(t));
+export const asksHours = (t) => HOURS.test(t);
+export const asksIfHuman = (t) => HUMAN.test(t);
+export const proposesVisitTime = (t) => VISIT_TIME.test(t);
+export const asksToCompare = (t) => COMPARE.test(t);
+
+
 const ONLY_SALES = 'We only sell properties, so I cannot help with rentals or leases. If you are open to buying, tell me the area, your budget and the kind of property, and I will find options.';
 
 export async function answerFromData({ text, lead, supabase, config: given = appConfig, intent = null }) {
@@ -105,7 +120,7 @@ export async function answerFromData({ text, lead, supabase, config: given = app
   }
 
   // ---- "what is the price of X": answer it, naming the listing, and show it if it is not already on screen ----
-  if (/\b(price|cost|how much|asking)\b/i.test(t) && isQuestion(t) && !negotiating && !/\b(per sq|market|average|trend|forecast|appreciat\w*|worth it)\b/i.test(t)) {
+  if (asksPrice(t) && !negotiating) {
     const named = await findByName(supabase, t, config.propertiesTable).catch(() => null);
     let row = named;
     if (!row && !hasSearchIntent(t)) {
@@ -123,19 +138,19 @@ export async function answerFromData({ text, lead, supabase, config: given = app
     }
   }
 
-  if (/\b(office|working|business|opening|open) (hours|timings?)\b|\bwhen (are|will) you (be )?(open|available)\b|\bwhat time (do|are) you\b/i.test(t)) {
+  if (HOURS.test(t)) {
     return { reply: `Our team confirms site visit requests ${config.businessHours}.` };
   }
 
-  if (/\b(real (person|human)|am i (talking|speaking|chatting) to|are you (a |an )?(bot|robot|human|real|ai|person|machine))\b/i.test(t)) {
+  if (HUMAN.test(t)) {
     return { reply: 'I am an automated assistant. Our sales team are people, and they follow up when you request a site visit.' };
   }
 
-  if (CITIES.test(t) && (isQuestion(t) || /\bdo you have\b/i.test(t))) {
+  if (asksOtherCity(t)) {
     return { reply: 'We only handle property in Chennai. Tell me what you are looking for in Chennai and I will show you what we have.' };
   }
 
-  if (/\bhow many\b[^.?!]*\b(propert\w+|listings?|flats?|homes?|plots?|options|units)\b/i.test(t) && !hasSearchIntent(t.replace(/how many/i, ''))) {
+  if (asksCount(t)) {
     const { data, error } = await supabase.from(config.propertiesTable).select('category,status').limit(1000);
     if (error) throw error;
     const live = data.filter((p) => ['available', 'under_construction'].includes(p.status));
@@ -145,7 +160,7 @@ export async function answerFromData({ text, lead, supabase, config: given = app
     return { reply: `We currently have ${live.length} properties listed: ${parts.join(', ')}. Tell me what you are looking for and I will show you the closest.` };
   }
 
-  if (/\b(still |currently )?(available|vacant|sold|taken|on sale)\b/i.test(t) && isQuestion(t) && !hasSearchIntent(t)) {
+  if (asksAvailability(t)) {
     const ref = referenced(t, shown);
     if (ref.ambiguous) return { reply: which(ref.ambiguous) };
     if (ref.property) {
@@ -156,7 +171,7 @@ export async function answerFromData({ text, lead, supabase, config: given = app
     }
   }
 
-  if (/\b(visit|see|view|come|drop by|tour)\b[^.?!]*\b(tomorrow|today|tonight|weekend|saturday|sunday|monday|tuesday|wednesday|thursday|friday|\d{1,2}(:\d\d)?\s?(am|pm)|at \d)\b/i.test(t)) {
+  if (VISIT_TIME.test(t)) {
     const ref = referenced(t, shown);
     return {
       reply: `I cannot set a time myself. Request a site visit and our team will confirm a time (${config.businessHours}).`,
@@ -164,7 +179,7 @@ export async function answerFromData({ text, lead, supabase, config: given = app
     };
   }
 
-  if (/\bwhich\b[^.?!]*\b(is|are|would be)\b[^.?!]*\b(better|best)\b|\bwhich (one )?(would|should) (you|i)\b|\b(do )?you recommend\b|\bbetter of the\b|\bcompare\b/i.test(t)) {
+  if (COMPARE.test(t)) {
     if (shown.length < 2) return { reply: 'Tell me what you are looking for and I will show you a few options to compare.' };
     const rows = (await Promise.all(shown.map((p) => getProperty(supabase, p.id)))).filter(Boolean);
     const lines = rows.map(({ view }, i) =>

@@ -1042,3 +1042,23 @@ test('rental requests get the fixed "we only sell" reply without a search; inves
   assert.equal(h.toUser().length, 1);
   assert.match(h.toUser()[0].text, /^We only sell properties/);
 });
+
+test('/reset puts a lead who was negotiating back at initiated, and the history keeps the earlier stage', async () => {
+  const h = harness();
+  await seedLead(h, { budgetMax: 7000000 }, 'negotiating');
+
+  await h.send(say('/reset'));
+
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'initiated');
+  const move = h.rows('lead_events').find((e) => e.event_type === 'stage_changed' && e.to_stage === 'initiated');
+  assert.equal(move.from_stage, 'negotiating');
+  assert.equal(move.note, 'customer started over');
+  assert.equal((await getLead(h.supabase, ID)).budgetMax, 7000000, 'the profile is kept');
+});
+
+test('/start does not change the stage of a returning lead', async () => {
+  const h = harness();
+  await seedLead(h, {}, 'negotiating');
+  await h.send(say('/start'));
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'negotiating');
+});

@@ -12,9 +12,9 @@ import { createDeps } from './agent.js';
 export const ALLOWED_UPDATES = ['message', 'callback_query'];
 
 export const COMMANDS = [
-  { command: 'start', description: 'Start over and browse properties' },
+  { command: 'start', description: 'Open the menu and browse properties' },
   { command: 'saved', description: 'Your shortlisted properties' },
-  { command: 'reset', description: 'Clear our conversation' },
+  { command: 'reset', description: 'Start over with a fresh conversation' },
   { command: 'privacy', description: 'How your data is used' },
   { command: 'mydata', description: 'What we hold about you' },
   { command: 'forget', description: 'Delete your data' },

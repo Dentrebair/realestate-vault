@@ -1,5 +1,5 @@
 // Slash commands and the messages that are not plain text.
-import { setBotState, upsertLeadMemory } from '../leadMemory.js';
+import { setBotState, setStage, upsertLeadMemory } from '../leadMemory.js';
 import { getProperty } from '../propertySearch.js';
 import { browseKeyboard } from './cards.js';
 import { loadPhotos } from '../photos.js';
@@ -54,6 +54,8 @@ export async function reset(ctx, deps) {
   if (needsConsent(lead, deps.config)) return askConsent(ctx, deps);
   await clearHistory(deps.supabase, customerId);
   await setBotState(deps.supabase, customerId, { shown: [], lastSearch: null, scope: 'on_topic' });
+  // Starting over puts the Lead back at the first stage. The earlier stages stay in their history.
+  await setStage(deps.supabase, customerId, 'initiated', { actor: 'restart', reason: 'customer started over' });
   await ctx.reply(RESET_DONE);
 }
 

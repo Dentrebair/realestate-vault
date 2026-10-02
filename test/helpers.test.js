@@ -112,6 +112,11 @@ test('stage rules: who may move a lead where', () => {
   assert.equal(canTransition('not_interested', 'interested', 'system').ok, true);
   assert.equal(canTransition('not_interested', 'negotiating', 'model').ok, false);
 
+  // starting over is the one customer action that goes backwards
+  assert.equal(canTransition('negotiating', 'initiated', 'restart').ok, true);
+  assert.equal(canTransition('negotiating', 'interested', 'restart').ok, false);
+  assert.equal(canTransition('negotiating', 'initiated', 'system').ok, false);
+
   assert.equal(canTransition('interested', 'interested', 'system').noop, true);
   assert.equal(canTransition('initiated', 'nonsense', 'system').ok, false);
   assert.equal(canTransition('initiated', 'interested', 'stranger').ok, false);

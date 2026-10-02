@@ -17,10 +17,10 @@ export const NON_TEXT = 'I can read text messages for now. Please type what you 
 
 export const HELP =
   'Tell me what you are looking for, for example "3BHK in OMR under 1.5 crore" or "shop in Mylapore".\n\n' +
-  '/saved shows your shortlist\n/reset starts the conversation again\n\n' +
+  '/saved shows your shortlist\n/reset starts everything again from the beginning\n\n' +
   'Listings are indicative and subject to verification by our team.';
 
-export const RESET_DONE = 'Done. I have cleared our conversation. Your saved preferences and shortlist are kept.';
+export const RESET_DONE = 'Done. I have cleared our conversation and we are starting fresh. Your saved preferences and shortlist are kept.';
 
 export const NO_SAVED = 'You have not shortlisted anything yet. Tap ⭐ Shortlist on a property to keep it here.';
 

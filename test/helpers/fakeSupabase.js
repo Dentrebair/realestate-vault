@@ -22,6 +22,7 @@ const DEFAULTS = {
   knowledge_entries: () => ({ active: true, served_count: 0, keywords: [] })
 };
 
+const UNIQUE_KEYS = { telegram_updates: 'update_id' };
 const IDENTITY_TABLES = new Set(['property_photos', 'knowledge_gaps', 'knowledge_entries', 'audit_log', 'deletion_log']);
 
 let clock = 0;
@@ -63,6 +64,10 @@ export function createFakeSupabase(seed = {}) {
       },
       eq(column, value) {
         state.filters.push((row) => row[column] === value);
+        return api;
+      },
+      is(column, value) {
+        state.filters.push((row) => (value === null ? row[column] == null : row[column] === value));
         return api;
       },
       lt(column, value) {
@@ -107,6 +112,10 @@ export function createFakeSupabase(seed = {}) {
         affected = matching();
       } else if (state.op === 'insert') {
         for (const row of state.rows) {
+          const unique = UNIQUE_KEYS[name];
+          if (unique && table.some((r) => r[unique] === row[unique])) {
+            return { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint' } };
+          }
           const full = { ...(DEFAULTS[name]?.() ?? {}), created_at: stamp(), ...(IDENTITY_TABLES.has(name) ? { id: nextId++ } : {}), ...structuredClone(row) };
           table.push(full);
           affected.push(full);

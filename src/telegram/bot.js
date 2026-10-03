@@ -22,8 +22,21 @@ export const COMMANDS = [
 ];
 
 // `ai` is for tests: { generate, model, providerOptions } replaces the real model.
+// Telegram answers 429 when a chat is sent to too fast, and says how long to wait. Nothing was sent, so waiting
+// and sending again is safe. Other failures are not retried: the message may already have gone out.
+export function retryWhenBusy({ attempts = 3, maxWaitMs = 5000, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+  return async (previous, method, payload, signal) => {
+    for (let attempt = 1; ; attempt++) {
+      const result = await previous(method, payload, signal);
+      if (result.ok || result.error_code !== 429 || attempt >= attempts) return result;
+      await sleep(Math.min((result.parameters?.retry_after ?? 1) * 1000, maxWaitMs));
+    }
+  };
+}
+
 export function createBot({ token, botInfo, supabase, config, ai }) {
   const bot = new Bot(token, botInfo ? { botInfo } : undefined);
+  bot.api.config.use(retryWhenBusy());
 
   const agent = createDeps({
     timeoutMs: config.agentTimeoutMs,

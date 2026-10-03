@@ -3,6 +3,9 @@ import { config, isSupabaseConfigured, isTelegramConfigured, telegramMode } from
 import { startRetention } from './privacy.js';
 import { createSupabaseClient } from './supabase.js';
 import { ALLOWED_UPDATES, COMMANDS, createBot } from './telegram/bot.js';
+import { createInbox } from './telegram/inbox.js';
+import { startAlertRetry } from './telegram/sales.js';
+import { drain, startRecovery } from './telegram/webhook.js';
 
 function refuse(message) {
   console.error(`Refusing to start: ${message}`);
@@ -32,12 +35,16 @@ if (config.nodeEnv === 'production' && isTelegramConfigured && (!process.env.BUS
   console.warn('BUSINESS_NAME and PRIVACY_CONTACT are not set. The privacy notice will not name the business or say how to reach it.');
 }
 
-const app = createApp({ supabase, telegramBot: bot });
+// Webhook updates are written down before they are answered, so a crash or a deploy cannot lose one.
+const inbox = bot && supabase && telegramMode === 'webhook' ? createInbox({ supabase }) : null;
+const app = createApp({ supabase, telegramBot: bot, inbox });
 const server = app.listen(config.port, () => {
   console.log(`Connector listening on port ${config.port} (${config.nodeEnv})`);
 });
 
 if (bot) {
+  if (inbox) startRecovery(bot, inbox);
+  startAlertRetry({ supabase, api: bot.api, chatId: config.salesDeskChatId });
   await bot.init();
   await bot.api.setMyCommands(COMMANDS);
 
@@ -68,6 +75,9 @@ async function shutdown(signal) {
   const deadline = setTimeout(() => process.exit(1), 15000);
   deadline.unref();
   if (bot && telegramMode === 'polling') await bot.stop();
+  // Replies already being written are allowed to finish. Anything cut off is picked up again from the inbox.
+  const left = await drain(12000);
+  if (left) console.warn(`${left} updates were still being answered; they will be retried on the next start.`);
   server.close(() => process.exit(0));
 }
 process.on('SIGTERM', () => shutdown('SIGTERM'));

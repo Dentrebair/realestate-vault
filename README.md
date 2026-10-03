@@ -49,6 +49,7 @@ Run these in the Supabase SQL editor, in order:
 3. [sql/003_photos.sql](sql/003_photos.sql) creates the photo table and the public `property-photos` storage bucket.
 4. [sql/004_knowledge.sql](sql/004_knowledge.sql) creates the tables for knowledge gaps and approved answers.
 5. [sql/005_privacy.sql](sql/005_privacy.sql) adds the consent version, the staff access log and the deletion log.
+6. [sql/006_reliability.sql](sql/006_reliability.sql) makes Telegram updates durable: each one is written down before the bot answers, so a crash or a deploy cannot lose a message. Optional; without it the bot works as before.
 
 The listings themselves live in a `properties` table that already exists in the project.
 

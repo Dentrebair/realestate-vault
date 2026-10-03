@@ -13,6 +13,7 @@ import { webhookHandler } from './telegram/webhook.js';
 export function createApp({
   supabase = createSupabaseClient(),
   telegramBot = null,
+  inbox = null,
   telegramSecret = config.telegramWebhookSecret,
   enableToolRoutes = config.enableToolRoutes,
   admin = defaultAdmin(supabase)
@@ -58,7 +59,7 @@ export function createApp({
   }
 
   if (telegramBot) {
-    app.post('/telegram/webhook', webhookHandler(telegramBot, telegramSecret));
+    app.post('/telegram/webhook', webhookHandler(telegramBot, telegramSecret, inbox));
   }
 
   // The tool routes are for chat agents that call this service over HTTP (the WhatsApp setup).

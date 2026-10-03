@@ -27,7 +27,7 @@ of an error would show `Node.js v20…` if it picked the wrong one; if that ever
 3. **Settings, Networking, Generate Domain.** This is required: Telegram needs a public https address for the webhook. The
    service picks up `RAILWAY_PUBLIC_DOMAIN` by itself, so you do not set `PUBLIC_BASE_URL`.
 4. **Settings, Region**: choose one near your Supabase project (its region is in the Supabase dashboard, Settings, General).
-5. **Replicas: 1.** The duplicate-message check, the rate limit and the one-message-at-a-time queue live in memory.
+5. **Replicas: 1.** The one-message-at-a-time queue and the rate limit live in memory, so a second copy could handle two quick messages from the same customer at once and overwrite saved details. See the scaling notes in [docs/SPRINT_PLAN.md](SPRINT_PLAN.md) before changing this.
 6. Deploy. In **Deployments, View logs** you should see:
    ```
    Connector listening on port <n> (production)
@@ -56,7 +56,7 @@ are turned on without a token).
 
 ## Check it works
 
-1. `https://<your-domain>/health` returns `ok: true`, `supabaseConfigured: true`, `telegramConfigured: true`.
+1. `https://<your-domain>/health` returns `ok: true`, `supabaseConfigured: true`, `telegramConfigured: true`, and `commit`, the first 7 characters of the commit that is running. Compare it with `git log --oneline -1` to be sure the latest code is live.
 2. In Telegram, `/start` on a fresh account asks for agreement; tap **I agree**; ask for `3BHK in OMR under 1.5 crore`.
 3. `https://<your-domain>/admin/`: sign in, find the lead, move its stage, open **Listings** and **Knowledge**.
 4. Tap **Book Site Visit** and confirm the alert reaches the Sales desk chat.
@@ -72,4 +72,5 @@ are turned on without a token).
 - **Photos do not load in the board.** The page may only load images from your `SUPABASE_URL`; check that variable.
 - **Running locally again.** `npm start` on your laptop deletes the webhook so it can poll, which silences the deployed
   bot. Redeploy or restart the Railway service afterwards to register the webhook again.
+- **A fix is pushed but the bot behaves as before.** The **Redeploy** button runs the previous build again. Deploy the latest commit instead (or run `railway up`), then check the `commit` on `/health`.
 - **Roll back.** Redeploy an earlier commit from Deployments. Data lives in Supabase and is unaffected.

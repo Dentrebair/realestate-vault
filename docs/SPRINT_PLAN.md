@@ -197,6 +197,35 @@ Measured with two audits and the same judge before and after (gpt-5-mini):
 
 ---
 
+## Add-on: the model decides what a message is about
+
+Status: built 2026-10-02. No new SQL. Triggered by a price offer ("can i get for 54L") that did not move the lead to negotiating, and by hand-written keyword rules missing paraphrases, Tamil and Tanglish.
+
+The principle: **the model decides what a message means; code decides what happens next.** The model only returns a label. Every reply is still written by code from the data, and stage rules, the no-agreed-price reply and the fact filters are unchanged.
+
+- [x] **Negotiation judge** ([src/telegram/negotiation.js](../src/telegram/negotiation.js)): reads price-like messages when a property is on screen and returns whether the customer is negotiating and any amount offered. A search that only mentions money ("under 54L") is never an offer; a unit the model guessed is accepted only when the amount is believable for the listing.
+- [x] **Router** ([src/telegram/router.js](../src/telegram/router.js)): one label per message. Routed by the model so far: hours, "are you a bot", total count, availability, other city, price question, rental, visit time. A visit-time label is used only when a property on screen can be acted on; otherwise the main agent offers the button.
+- [x] Fallback: if the model call fails or takes over 4 seconds, the keyword rules decide, as before. Rental keeps its keyword rule as a floor because it has had no false alarms.
+- [x] Rental and lease requests get a fixed "we only sell" reply and no search. Questions about a listing's rental income or yield are left alone.
+- [x] "Anything else / apart from this" leaves out what was just shown (`excludeShown`). If nothing else fits, the reply says the one shown is the only match and does not count it as unmet demand.
+- [x] The reply text is sent before the property cards, so the customer reads it first. Cards are still sent if the reply fails.
+- [x] Questions about stamp duty, registration, tax and similar charges are not answered with the price of the property on screen.
+- [x] `/reset` is a real fresh start: the lead goes back to `initiated` (the earlier stage stays in its history). `/start` does not change the stage.
+
+Measured with the real model on labelled messages:
+
+| | Keyword rules | Model |
+|---|---|---|
+| Negotiation, 40 messages ([evals/intent-compare.js](../evals/intent-compare.js)) | 32 | 40 |
+| All message types, 115 messages ([evals/router.js](../evals/router.js)) | 88 | 112 |
+
+Both are permanent checks: `npm run eval:negotiation` fails below 38 of 40 or on any clear-cut message; `npm run eval:router` reports the rules and the model side by side, with `-- --repeat 3` for consistency. When a real message is misjudged, add it to the list.
+
+- Still on keyword rules (they were right on most of these): photos, comparing, and the specific-detail topics such as parking and RERA.
+- Known limits: one label per message, so "is this a bot? also show me 2BHK in OMR" handles only one part; one extra model call (about 1.3 seconds) on most messages, run beside the negotiation judge.
+
+---
+
 ## Phase 2, sprint 1: before real customers (privacy)
 
 Status: built 2026-10-01. Needs `sql/005_privacy.sql` run (and `sql/004_knowledge.sql` from the last add-on, which is still missing from the database).
@@ -211,7 +240,30 @@ Status: built 2026-10-01. Needs `sql/005_privacy.sql` run (and `sql/004_knowledg
 - [ ] Decide `BOARD_SHOW_CONVERSATIONS` for real customers (currently test leads only).
 - Not done: removing alerts already sent to the Sales desk chat when a customer asks to be forgotten (the notice says the team must do it).
 
-Remaining Phase 2: reliability (database inbox, alert retries), human handoff, growth ideas, and the Railway deploy last.
+Remaining Phase 2: human handoff and growth ideas. Reliability is built (next section). **Deferred to the very end by the owner:** the privacy and legal work (`sql/005_privacy.sql`, `BUSINESS_NAME`, `PRIVACY_CONTACT`, the lawyer's review of the notice and retention periods).
+
+---
+
+## Phase 2, sprint 2: reliability
+
+Status: built 2026-10-03. Optional `sql/006_reliability.sql`; without it the bot behaves as before.
+
+- [x] **Durable updates.** Each webhook update is written to `telegram_updates` before the bot answers "received". If the write fails the bot returns 500 and Telegram sends the update again. The update number is the primary key, so a repeat is recognised after a restart.
+- [x] **Recovery.** Updates that were accepted but not finished are processed again within a few minutes. If the service is killed after a reply but before the update is marked done, the customer can see that reply twice.
+- [x] **Privacy.** The message text is kept only while the update waits; once done it is cleared, and the update number is deleted after 7 days.
+- [x] **Graceful deploys.** Shutdown waits up to 12 seconds for replies in progress.
+- [x] **Sales desk alerts retried.** A visit request whose alert failed is resent every minute for up to a day, using the existing `alerted_at` column. Alerts under 2 minutes old are left alone.
+- [x] **Telegram 429 ("too fast").** Telegram refuses a message when a bot sends too quickly, and says how long to wait. The call waits that long (at most 5 seconds) and retries, up to 3 attempts. Only 429 is retried: it means nothing was sent. Other failures are not repeated, because the message may already have gone out and the customer would see it twice.
+- [ ] **You:** run `sql/006_reliability.sql`, then redeploy.
+- Left out on purpose: a rate limit counted from the database. It still resets on restart; it only guards against someone abusing the bot, and a database check on every message adds cost and delay for little gain at one copy.
+
+### Scaling: what holds and what does not
+
+- A copy of the bot is not tied to a user. One copy serves many customers at once, because it mostly waits on OpenAI and Telegram. Several copies share the same Supabase database and the same Telegram webhook, and each message goes to whichever copy is free.
+- **Supabase handles the load.** It is Postgres behind an HTTP API; many copies and users reading and writing together is normal for it. The limits to watch are the plan's size and rate limits.
+- **Supabase does not make one customer's two messages safe.** The code reads the saved profile, changes it and writes it back. Two quick messages from the same customer on different copies can overwrite each other. The stage change is protected (it only updates if the stage is still what was read); other fields such as saved requirements and what was last shown are not.
+- Today the one-message-at-a-time queue, the duplicate check and the rate limit live in memory, which is correct for **one copy** (Railway replicas = 1). The duplicate check is now also in the database.
+- **Before running more than one copy:** add a per-customer lock in the database (or make the profile writes atomic), and count the rate limit from the database. Until then, a bigger single copy is the safer way to get more capacity.
 
 ---
 
@@ -247,8 +299,8 @@ Commands (after P0):
 - Legal review of the consent text and retention periods (India's DPDP Act expects notice and consent for personal data). `/privacy` and `/forget` commands. Retention jobs: chat messages 30 days, leads per the agreed period.
 - Separate dev and prod bots and databases.
 
-**Reliability**
-- Database inbox for updates (survives restarts and overlapping deploys, re-drives unfinished updates); persisted Sales desk alerts with a retry job and `alerted_at`; graceful shutdown; rate limit counted from the database.
+**Reliability** (the inbox, alert retries, graceful shutdown and the Telegram retry are built; see the sprint above)
+- Still open: a rate limit counted from the database and a per-customer lock before running several copies.
 - Load and failure testing (OpenAI down, Supabase down, Telegram retries), a PII audit of logs, a runbook, a one-week soft launch.
 
 **Handoff**
@@ -269,6 +321,8 @@ Commands (after P0):
 | A stale card is tapped after a listing sells | Every tap re-checks the property |
 | Public bot costs money | Rate limit, length cap, step cap; set an OpenAI spend limit |
 | Test data mixes with real data later | `is_test` flag and `test:` prefix; `--clean` removes it |
+| More than one copy of the bot running | Keep Railway replicas at 1; see the scaling notes before changing it |
+| A deploy that did not pick up the latest code | `/health` shows the running commit; use "deploy latest commit", not "Redeploy" on an old deployment |
 | Two branches drift | Changes to `lead_stage` and search live on `telegram` for now; reconcile with `main` when WhatsApp resumes |
 
 ## Open questions
@@ -285,3 +339,5 @@ Commands (after P0):
 | 2026-09-30 | v1 from the design review of the PRD. |
 | 2026-09-30 | v2 after the architecture review: live-data findings, code-rendered cards, privacy and security work, risk register. |
 | 2026-09-30 | v3 rescoped to a client prototype: match-and-recommend plus stage pipeline; client stage names; lead board; 50 test leads; hardening moved to Phase 2. |
+| 2026-10-02 | Model-decided routing: negotiation judge and a message router, rental and "anything else" handling, reply before cards, `/reset` returns a lead to initiated. |
+| 2026-10-03 | Reliability sprint: durable updates, recovery, graceful deploys, retried visit alerts, Telegram 429 retry. Scaling notes added. Privacy and legal work deferred to the end by the owner. |

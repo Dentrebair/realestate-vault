@@ -55,7 +55,8 @@ export function createApp({
 
   // The lead board for staff. Its own sign-in; it never shares a secret with the tool routes.
   if (admin) {
-    app.use('/admin', createAdminRouter({ supabase, ...admin }));
+    // A reply written on the board is delivered by the bot, so the router is given its Telegram client.
+    app.use('/admin', createAdminRouter({ supabase, ...admin, telegram: telegramBot ? { api: telegramBot.api, config } : null }));
   }
 
   if (telegramBot) {

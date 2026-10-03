@@ -91,7 +91,7 @@
 
   $('show-tests').addEventListener('change', (event) => {
     state.showTests = event.target.checked;
-    if (state.view === 'knowledge') loadKnowledge(); else refresh();
+    if (state.view === 'knowledge') loadKnowledge(); else if (state.view === 'requests') loadRequests(); else refresh();
   });
 
   // ---- board ---------------------------------------------------------------------------------
@@ -101,12 +101,19 @@
     $('app').hidden = false;
     $('who').textContent = `${state.me.email} (${state.me.role})`;
     $('tab-audit').hidden = state.me.role !== 'admin';
+    $('tab-requests').hidden = state.me.role !== 'admin';
     const linked = /^#lead=(.+)$/.exec(location.hash);
     if (linked) openDrawer(decodeURIComponent(linked[1]));
     setView(state.view);
     refreshGapCount();
+    refreshRequestCount();
     clearInterval(state.timer);
-    state.timer = setInterval(() => { if (!document.hidden) { refresh(); if (state.view !== 'knowledge') refreshGapCount(); } }, REFRESH_MS);
+    state.timer = setInterval(() => {
+      if (document.hidden) return;
+      if (state.view === 'requests') loadRequests(); else refresh();
+      if (state.view !== 'knowledge') refreshGapCount();
+      if (state.view !== 'requests') refreshRequestCount();
+    }, REFRESH_MS);
   }
 
   async function refresh() {
@@ -271,6 +278,93 @@
       el('span', { class: 'when', text: `${timeAgo(e.at)}${who ? ` · ${who}` : ''}` }));
   }
 
+
+  // ---- requests the bot passed to the team ----------------------------------------------------
+
+  const REQUEST_STATUS = { open: 'Needs the team', waiting_customer: 'Waiting for the customer', resolved: 'Resolved' };
+  const openThreads = new Set();
+
+  function setRequestCount(n) {
+    $('request-count').textContent = String(n);
+    $('request-count').hidden = !n;
+  }
+
+  async function refreshRequestCount() {
+    if (state.me?.role !== 'admin') return;
+    try { setRequestCount((await api('/handoffs?status=open')).open); } catch { /* the badge is optional */ }
+  }
+
+  async function loadRequests({ force = false } = {}) {
+    try {
+      const tests = state.showTests ? '1' : '0';
+      const filter = $('request-filter').value;
+      const { requests, open } = await api(`/handoffs?${filter === 'all' ? '' : `status=${filter}&`}tests=${tests}`);
+      setRequestCount(open);
+      // A conversation being read or written stays as it is; the list around it refreshes.
+      if (!force && document.activeElement?.closest?.('#request-list')) return;
+      renderRequests(requests);
+    } catch (e) {
+      if (e.message !== 'signed out') notice(`Could not load requests: ${e.message}`, true);
+    }
+  }
+
+  function renderRequests(requests) {
+    $('request-list').replaceChildren(...(requests.length ? requests.map((r) => {
+      const thread = el('div', { class: 'thread', 'aria-label': 'Conversation' });
+      const reply = el('textarea', { maxlength: '1500', placeholder: 'Write a reply. The customer gets it from the bot as "Message from our team".', 'aria-label': 'Reply' });
+      const detail = el('div', { hidden: !openThreads.has(r.id) });
+
+      const showThread = async () => {
+        try {
+          const data = await api(`/handoffs/${r.id}`);
+          thread.replaceChildren(...data.thread.map((m) =>
+            el('div', { class: `bubble ${m.direction}` }, m.text,
+              el('span', { class: 'by', text: `${m.direction === 'staff' ? (m.author ?? 'team') : 'customer'} · via ${m.via} · ${timeAgo(m.createdAt)}` }))));
+          thread.scrollTop = thread.scrollHeight;
+        } catch (e) { if (e.message !== 'signed out') notice(e.message, true); }
+      };
+
+      const send = el('button', { type: 'button', class: 'primary', text: 'Send reply', onclick: async () => {
+        if (!reply.value.trim()) { notice('Write a reply first.', true); return; }
+        send.disabled = true;
+        try {
+          const result = await api(`/handoffs/${r.id}/reply`, { method: 'POST', body: JSON.stringify({ text: reply.value }) });
+          notice(result.delivered ? 'Sent to the customer.' : `Saved, but not delivered: ${result.reason}`, !result.delivered);
+          reply.value = '';
+          await showThread();
+          loadRequests({ force: true });
+        } catch (e) { notice(e.message, true); } finally { send.disabled = false; }
+      } });
+
+      const toggle = el('button', { type: 'button', text: openThreads.has(r.id) ? 'Hide conversation' : 'Open conversation', onclick: () => {
+        const nowOpen = detail.hidden;
+        detail.hidden = !nowOpen;
+        if (nowOpen) { openThreads.add(r.id); showThread(); } else openThreads.delete(r.id);
+        toggle.textContent = nowOpen ? 'Hide conversation' : 'Open conversation';
+      } });
+      if (openThreads.has(r.id)) showThread();
+
+      const resolved = r.status === 'resolved';
+      const finish = el('button', { type: 'button', text: resolved ? 'Reopen' : 'Mark resolved', onclick: async () => {
+        try { await api(`/handoffs/${r.id}/${resolved ? 'reopen' : 'resolve'}`, { method: 'POST' }); loadRequests({ force: true }); } catch (e) { notice(e.message, true); }
+      } });
+
+      detail.append(thread, reply, el('div', { class: 'gap-actions' }, send));
+      return el('article', { class: 'gap' },
+        el('div', { class: 'gap-head' },
+          el('span', { class: 'gap-title' },
+            el('span', { class: 'badge kind', text: r.kindLabel }),
+            el('a', { href: `#lead=${encodeURIComponent(r.customerId)}`, text: r.customerName, onclick: () => { setView('leads'); setTimeout(() => openDrawer(r.customerId), 200); } }),
+            r.customerHandle && el('span', { class: 'muted', text: `@${r.customerHandle}` }),
+            r.isTest && el('span', { class: 'badge test', text: 'TEST' })),
+          el('span', {}, el('span', { class: `req-status ${r.status}`, text: REQUEST_STATUS[r.status] ?? r.status }), el('span', { class: 'muted', text: ` · #${r.id} · ${timeAgo(r.createdAt)}` }))),
+        el('p', { class: 'gap-quote', text: r.summary }),
+        r.propertyTitle && el('p', { class: 'muted', text: `About: ${r.propertyTitle}` }),
+        el('div', { class: 'gap-actions' }, toggle, finish),
+        detail);
+    }) : [el('p', { class: 'muted', text: 'Nothing here. Requests appear when a customer asks to visit, asks for a call back, makes an offer, or asks something the assistant cannot answer.' })]));
+  }
+
   // ---- listings and their photos ----------------------------------------------------------------
 
   function setView(view) {
@@ -278,20 +372,24 @@
     $('leads-view').hidden = view !== 'leads';
     $('listings-view').hidden = view !== 'listings';
     $('knowledge-view').hidden = view !== 'knowledge';
+    $('requests-view').hidden = view !== 'requests';
     $('audit-view').hidden = view !== 'audit';
     $('tests-toggle').hidden = view === 'listings' || view === 'audit';
-    for (const name of ['leads', 'listings', 'knowledge', 'audit']) {
+    for (const name of ['leads', 'listings', 'requests', 'knowledge', 'audit']) {
       $(`tab-${name}`).setAttribute('aria-current', view === name ? 'page' : 'false');
     }
     closeDrawer();
     if (view === 'leads') refresh();
     else if (view === 'listings') loadListings();
     else if (view === 'audit') loadAudit();
+    else if (view === 'requests') loadRequests();
     else loadKnowledge();
   }
 
   $('tab-leads').addEventListener('click', () => setView('leads'));
   $('tab-listings').addEventListener('click', () => setView('listings'));
+  $('tab-requests').addEventListener('click', () => setView('requests'));
+  $('request-filter').addEventListener('change', loadRequests);
   $('tab-knowledge').addEventListener('click', () => setView('knowledge'));
   $('tab-audit').addEventListener('click', () => setView('audit'));
   $('listing-search').addEventListener('input', renderListings);

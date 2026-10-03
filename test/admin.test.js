@@ -553,3 +553,117 @@ test('the access log is for admins only, newest first', async () => {
   assert.deepEqual(entries[0], { id: entries[0].id, staff: 'admin@x.com', action: 'view_lead', customerId: entries[0].customerId, sawPhone: entries[0].sawPhone, sawConversation: true, at: entries[0].at });
   assert.deepEqual(entries.map((e) => e.customerId).sort(), ['telegram:1', 'test:002']);
 });
+
+// ---- requests the bot passed to the team ----------------------------------------------------
+
+function withRequests() {
+  const { supabase } = build();
+  supabase.tables.handoffs = [
+    { id: 1, customer_id: 'telegram:1', kind: 'offer', status: 'open', summary: 'Offered ₹54 L for High-Rise 2BHK', property_id: 'p04', is_test: false, alert_chat_id: 999, alert_message_id: 500, created_at: '2026-10-01T10:00:00Z', updated_at: '2026-10-01T10:00:00Z' },
+    { id: 2, customer_id: 'test:001', kind: 'question', status: 'open', summary: 'Is there a rooftop garden?', property_id: null, is_test: true, created_at: '2026-10-01T11:00:00Z', updated_at: '2026-10-01T11:00:00Z' },
+    { id: 3, customer_id: 'telegram:2', kind: 'visit', status: 'resolved', summary: 'Asked to visit Compact 1BHK', property_id: 'p16', is_test: false, created_at: '2026-10-01T08:00:00Z', updated_at: '2026-10-01T08:30:00Z', resolved_at: '2026-10-01T08:30:00Z', resolved_by: 'admin@x.com' }
+  ];
+  supabase.tables.handoff_messages = [
+    { id: 1, handoff_id: 1, direction: 'customer', via: 'bot', author: null, text: 'Offered ₹54 L for High-Rise 2BHK', created_at: '2026-10-01T10:00:00Z' },
+    { id: 2, handoff_id: 1, direction: 'staff', via: 'telegram', author: 'telegram:999', text: 'Let me check with the owner.', created_at: '2026-10-01T10:05:00Z' }
+  ];
+  const sent = [];
+  const bot = { handleUpdate: async () => {}, api: { sendMessage: async (chatId, text, options) => { sent.push({ chatId, text, options }); return { message_id: 600, chat: { id: chatId } }; } } };
+  const app = createApp({ supabase, telegramBot: bot, telegramSecret: 's'.repeat(32), enableToolRoutes: false, admin: { auth: fakeAuth, showConversations: 'test' } });
+  return { app, supabase, sent };
+}
+
+test('requests are for admins only', async () => {
+  const { app } = withRequests();
+  await request(app).get('/admin/api/handoffs').expect(401);
+  const viewer = await signIn(app, 'viewer@x.com');
+  await viewer.get('/admin/api/handoffs').expect(403);
+  await viewer.get('/admin/api/handoffs/1').expect(403);
+  await viewer.post('/admin/api/handoffs/1/reply').send({ text: 'hi' }).expect(403);
+});
+
+test('the list shows who asked what, filters by status, and can hide test leads', async () => {
+  const { app } = withRequests();
+  const agent = await signIn(app);
+
+  const all = (await agent.get('/admin/api/handoffs').expect(200)).body;
+  assert.equal(all.requests.length, 3);
+  assert.equal(all.open, 2);
+  assert.equal(all.requests[0].id, 2, 'newest first');
+  assert.equal(all.requests.find((r) => r.id === 1).customerName, 'Asha');
+  assert.equal(all.requests.find((r) => r.id === 1).propertyTitle, 'High-Rise 2BHK Apartment near Tech Parks');
+
+  assert.deepEqual((await agent.get('/admin/api/handoffs?status=open').expect(200)).body.requests.map((r) => r.id).sort(), [1, 2]);
+  assert.deepEqual((await agent.get('/admin/api/handoffs?status=resolved').expect(200)).body.requests.map((r) => r.id), [3]);
+  assert.deepEqual((await agent.get('/admin/api/handoffs?status=open&tests=0').expect(200)).body.requests.map((r) => r.id), [1]);
+});
+
+test('opening a request shows the whole thread, and is logged like opening a conversation', async () => {
+  const { app, supabase } = withRequests();
+  const agent = await signIn(app);
+  const { request: handoff, thread } = (await agent.get('/admin/api/handoffs/1').expect(200)).body;
+
+  assert.equal(handoff.kind, 'offer');
+  assert.deepEqual(thread.map((m) => [m.direction, m.via, m.text]), [
+    ['customer', 'bot', 'Offered ₹54 L for High-Rise 2BHK'],
+    ['staff', 'telegram', 'Let me check with the owner.']
+  ]);
+  assert.ok((supabase.tables.audit_log ?? []).some((e) => e.customer_id === 'telegram:1' && e.detail.conversation === true));
+  await agent.get('/admin/api/handoffs/99').expect(404);
+});
+
+test('a reply written on the board reaches the customer and is shown to the team', async () => {
+  const { app, supabase, sent } = withRequests();
+  const agent = await signIn(app);
+
+  const result = (await agent.post('/admin/api/handoffs/1/reply').send({ text: 'The owner can do ₹58 L. Please visit to discuss.' }).expect(200)).body;
+
+  assert.equal(result.delivered, true);
+  const toCustomer = sent.find((m) => m.chatId === 1);
+  assert.match(toCustomer.text, /Message from our team/);
+  assert.match(toCustomer.text, /The owner can do ₹58 L/);
+
+  const saved = supabase.tables.handoff_messages.at(-1);
+  assert.deepEqual([saved.direction, saved.via, saved.author], ['staff', 'board', 'admin@x.com']);
+  assert.equal(supabase.tables.handoffs.find((h) => h.id === 1).status, 'waiting_customer');
+});
+
+test('a reply to a test lead is saved but not sent, and says so', async () => {
+  const { app, sent } = withRequests();
+  const agent = await signIn(app);
+  const result = (await agent.post('/admin/api/handoffs/2/reply').send({ text: 'Yes there is.' }).expect(200)).body;
+  assert.equal(result.delivered, false);
+  assert.match(result.reason, /test lead/);
+  assert.equal(sent.filter((m) => m.chatId !== config.salesDeskChatId).length, 0, 'nothing is sent to a customer chat');
+});
+
+test('an empty or oversized reply is refused', async () => {
+  const { app } = withRequests();
+  const agent = await signIn(app);
+  await agent.post('/admin/api/handoffs/1/reply').send({ text: '   ' }).expect(400);
+  await agent.post('/admin/api/handoffs/1/reply').send({ text: 'x'.repeat(1501) }).expect(400);
+  await agent.post('/admin/api/handoffs/99/reply').send({ text: 'hi' }).expect(404);
+});
+
+test('a request can be resolved and reopened from the board', async () => {
+  const { app, supabase } = withRequests();
+  const agent = await signIn(app);
+
+  await agent.post('/admin/api/handoffs/1/resolve').expect(200);
+  let row = supabase.tables.handoffs.find((h) => h.id === 1);
+  assert.equal(row.status, 'resolved');
+  assert.equal(row.resolved_by, 'admin@x.com');
+
+  await agent.post('/admin/api/handoffs/1/reopen').expect(200);
+  row = supabase.tables.handoffs.find((h) => h.id === 1);
+  assert.equal(row.status, 'open');
+  assert.equal(row.resolved_by, null);
+  await agent.post('/admin/api/handoffs/99/resolve').expect(404);
+});
+
+test('without Telegram connected, a board reply is refused rather than lost', async () => {
+  const { supabase } = withRequests();
+  const app = createApp({ supabase, enableToolRoutes: false, admin: { auth: fakeAuth, showConversations: 'test' } });
+  const agent = await signIn(app);
+  await agent.post('/admin/api/handoffs/1/reply').send({ text: 'hello' }).expect(503);
+});

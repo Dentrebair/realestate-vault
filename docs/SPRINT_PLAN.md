@@ -240,7 +240,7 @@ Status: built 2026-10-01. Needs `sql/005_privacy.sql` run (and `sql/004_knowledg
 - [ ] Decide `BOARD_SHOW_CONVERSATIONS` for real customers (currently test leads only).
 - Not done: removing alerts already sent to the Sales desk chat when a customer asks to be forgotten (the notice says the team must do it).
 
-Remaining Phase 2: human handoff and growth ideas. Reliability is built (next section). **Deferred to the very end by the owner:** the privacy and legal work (`sql/005_privacy.sql`, `BUSINESS_NAME`, `PRIVACY_CONTACT`, the lawyer's review of the notice and retention periods).
+Remaining Phase 2: growth ideas (human handoff is built, next section). Reliability is built (next section). **Deferred to the very end by the owner:** the privacy and legal work (`sql/005_privacy.sql`, `BUSINESS_NAME`, `PRIVACY_CONTACT`, the lawyer's review of the notice and retention periods).
 
 ---
 
@@ -264,6 +264,24 @@ Status: built 2026-10-03. Optional `sql/006_reliability.sql`; without it the bot
 - **Supabase does not make one customer's two messages safe.** The code reads the saved profile, changes it and writes it back. Two quick messages from the same customer on different copies can overwrite each other. The stage change is protected (it only updates if the stage is still what was read); other fields such as saved requirements and what was last shown are not.
 - Today the one-message-at-a-time queue, the duplicate check and the rate limit live in memory, which is correct for **one copy** (Railway replicas = 1). The duplicate check is now also in the database.
 - **Before running more than one copy:** add a per-customer lock in the database (or make the profile writes atomic), and count the rate limit from the database. Until then, a bigger single copy is the safer way to get more capacity.
+
+---
+
+## Phase 2, sprint 3: human handoff
+
+Status: built 2026-10-03. Needs `sql/007_handoffs.sql`; without it the alert still goes to Telegram as before, with no board entry and no reply thread.
+
+Decisions (owner, 2026-10-03): the team is one person for now (the Sales desk chat); the bot keeps answering while a request is open; all four triggers create a request.
+
+- [x] **A request is raised** on a site visit, on a request for a call back or to talk to someone, on a price offer or a question about a discount, and when the assistant has to say "I do not have that". A customer who makes several offers on one property, or asks several unanswered questions, is one conversation, not many alerts: later messages appear under the first alert.
+- [x] **The alert** names the customer, their number if shared, the property and what they asked, and ends with "Reply to this message to answer the customer." It has a **Mark resolved** button.
+- [x] **The team replies on Telegram** by replying to the alert (or to a forwarded customer message). The bot sends the text to the customer as "Message from our team" and confirms to the team. A plain message that is not a reply is treated as an ordinary message, so the owner can also test as a customer from the same account.
+- [x] **The customer's answer comes back** to the team on the same thread, one message at a time: after the team writes, the customer's next message is forwarded and the request goes back to "Needs the team"; the bot also answers it as usual.
+- [x] **The board has a Requests tab** (admins): a list with status (needs the team, waiting for the customer, resolved), the full thread with who wrote each line and whether it came from Telegram, the board or the bot, a reply box, and mark resolved or reopen. A reply from the board is delivered to the customer and shown to the team on Telegram; a reply from Telegram appears on the board.
+- [x] **Safeguards.** Only listed team accounts (`STAFF_TELEGRAM_IDS`, or the Sales desk chat when it is a person) can reply through an alert. Opening a thread is written to the access log. Requests and threads belong to the customer and are deleted with them (`/forget`, retention). Replies to test leads are saved but never sent. Viewers cannot see the tab.
+- [x] The customer is only told "I have passed this to our team" when the team really was told (a request was saved or the alert was sent).
+- [ ] **You:** run `sql/007_handoffs.sql`, optionally set `STAFF_TELEGRAM_IDS`, redeploy.
+- Not done: more than one team member answering with their own names (the thread shows the Telegram id), assigning a request to a person, a reminder when a request has waited too long, saving a team answer as an approved answer in one click, and a group chat for the team.
 
 ---
 
@@ -303,8 +321,8 @@ Commands (after P0):
 - Still open: a rate limit counted from the database and a per-customer lock before running several copies.
 - Load and failure testing (OpenAI down, Supabase down, Telegram retries), a PII audit of logs, a runbook, a one-week soft launch.
 
-**Handoff**
-- Choose between Telegram Business Mode (needs a Premium account) and a group relay where a sales executive replies to an alert and the bot forwards it. Adds PRD criterion 5 (30-minute human cooldown).
+**Handoff** (built as a reply-to-alert relay; see the sprint above)
+- Still open: a staff group chat with several named people, assignment, reminders, and the PRD's 30-minute cooldown where the bot goes quiet (the owner chose to keep the bot answering for now).
 
 **Growth ideas, by my guess at value**
 1. New-listing alerts for Leads with stored requirements (turns zero-result searches into future leads).
@@ -341,3 +359,4 @@ Commands (after P0):
 | 2026-09-30 | v3 rescoped to a client prototype: match-and-recommend plus stage pipeline; client stage names; lead board; 50 test leads; hardening moved to Phase 2. |
 | 2026-10-02 | Model-decided routing: negotiation judge and a message router, rental and "anything else" handling, reply before cards, `/reset` returns a lead to initiated. |
 | 2026-10-03 | Reliability sprint: durable updates, recovery, graceful deploys, retried visit alerts, Telegram 429 retry. Scaling notes added. Privacy and legal work deferred to the end by the owner. |
+| 2026-10-03 | Human handoff: requests on the board and Telegram alerts the team can reply to; the thread is shared between Telegram and the board. |

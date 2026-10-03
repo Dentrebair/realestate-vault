@@ -50,6 +50,7 @@ Run these in the Supabase SQL editor, in order:
 4. [sql/004_knowledge.sql](sql/004_knowledge.sql) creates the tables for knowledge gaps and approved answers.
 5. [sql/005_privacy.sql](sql/005_privacy.sql) adds the consent version, the staff access log and the deletion log.
 6. [sql/006_reliability.sql](sql/006_reliability.sql) makes Telegram updates durable: each one is written down before the bot answers, so a crash or a deploy cannot lose a message. Optional; without it the bot works as before.
+7. [sql/007_handoffs.sql](sql/007_handoffs.sql) adds team requests: the bot passes a visit request, a call back, a price offer or an unanswered question to the team, who reply on Telegram or from the Requests tab on the board. Optional; without it the alert still goes to Telegram, with no board entry and no reply thread.
 
 The listings themselves live in a `properties` table that already exists in the project.
 

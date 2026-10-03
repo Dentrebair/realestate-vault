@@ -5,13 +5,14 @@ import { STAGES } from '../stages.js';
 import { clearSessionCookies, createLoginLimiter, setSessionCookies, staffFromRequest } from './auth.js';
 import { listAccess, recordAccess } from './audit.js';
 import { getBoard, getDemand, getLeadDetail } from './board.js';
+import { mountHandoffRoutes } from './handoffRoutes.js';
 import { mountKnowledgeRoutes } from './knowledgeRoutes.js';
 import { mountPhotoRoutes } from './photoRoutes.js';
 
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
 
 // `auth` checks passwords and sessions; `showConversations` is 'test', 'all' or 'none'.
-export function createAdminRouter({ supabase, auth, showConversations = 'test', secureCookies = false, limiter = createLoginLimiter() }) {
+export function createAdminRouter({ supabase, auth, showConversations = 'test', secureCookies = false, limiter = createLoginLimiter(), telegram = null }) {
   const router = express.Router();
   const cookieOptions = { secure: secureCookies };
 
@@ -132,6 +133,7 @@ export function createAdminRouter({ supabase, auth, showConversations = 'test', 
 
   mountPhotoRoutes(router, { supabase, requireStaff, requireJson });
   mountKnowledgeRoutes(router, { supabase, requireStaff, requireJson });
+  mountHandoffRoutes(router, { supabase, requireStaff, requireJson, telegram });
 
   return router;
 }

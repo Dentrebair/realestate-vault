@@ -27,6 +27,7 @@
       <nav class="tabs" aria-label="Sections">
         <button id="tab-leads" type="button" aria-current="page">Leads</button>
         <button id="tab-listings" type="button">Listings</button>
+        <button id="tab-requests" type="button" hidden>Requests <span id="request-count" class="pill" hidden></span></button>
         <button id="tab-knowledge" type="button">Knowledge <span id="gap-count" class="pill" hidden></span></button>
         <button id="tab-audit" type="button" hidden>Access log</button>
       </nav>
@@ -57,6 +58,17 @@
         <input id="listing-search" type="search" placeholder="Search listings" aria-label="Search listings">
       </div>
       <div id="listing-list" class="listing-list"></div>
+    </section>
+
+    <section id="requests-view" class="listings" hidden>
+      <div class="listings-head">
+        <div>
+          <h2>Requests</h2>
+          <p class="muted">What the assistant passed to the team: site visits, call backs, price offers and questions it could not answer. Reply here or by replying to the alert on Telegram. Both land in the same conversation.</p>
+        </div>
+        <label class="toggle">Show <select id="request-filter" aria-label="Which requests"><option value="open">Open</option><option value="resolved">Resolved</option><option value="all">All</option></select></label>
+      </div>
+      <div id="request-list" class="gap-list"></div>
     </section>
 
     <section id="knowledge-view" class="listings" hidden>

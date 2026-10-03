@@ -95,7 +95,8 @@ export async function answerFromData({ text, lead, supabase, config: given = app
   }
 
   // ---- we only sell: no search, no cards ----
-  if (wantsRental(t)) return { reply: ONLY_SALES };
+  // Either the model or the keyword rule is enough: the rule has no false alarms on record, and it catches "PG near ...".
+  if (wantsRental(t) || (route && route.label === 'rental')) return { reply: ONLY_SALES };
 
   // ---- an offer on a property in play ("can i get for 54L"): not a search, and not a price we can agree ----
   const offer = intent ? intent.offer : isPriceOffer(t, shown) ? offeredAmount(t) : null;
@@ -179,7 +180,8 @@ export async function answerFromData({ text, lead, supabase, config: given = app
     }
   }
 
-  if (VISIT_TIME.test(t)) {
+  // A model label needs a property on screen to act on. Without one the main agent handles the visit request.
+  if (says('visit_time', proposesVisitTime) && (!route || referenced(t, shown).property)) {
     const ref = referenced(t, shown);
     return {
       reply: `I cannot set a time myself. Request a site visit and our team will confirm a time (${config.businessHours}).`,

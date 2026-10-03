@@ -1136,3 +1136,35 @@ test('the model recognises price questions the keyword rules miss', async () => 
   await h.send(say('second one evlo price'));
   assert.match(h.toUser()[0].text, /The listed price of Compact 1BHK Starter Flat is ₹28 L/);
 });
+
+test('the model recognises rental requests and visit times that the keyword rules miss', async () => {
+  const rental = harness({ route: '{"label":"rental","topic":null}', generate: async () => { throw new Error('the model must not write this'); } });
+  await seedLead(rental, {}, 'interested');
+  await rental.send(say('monthly rent ku veedu venum'));
+  assert.match(rental.toUser()[0].text, /^We only sell properties/);
+  assert.equal(rental.toUser().length, 1);
+
+  const visit = harness({ route: '{"label":"visit_time","topic":null}', generate: async () => { throw new Error('the model must not write this'); } });
+  await seedLead(visit, {}, 'interested');
+  await setBotState(visit.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+  await visit.send(say('naalaiku 4 mani ku paakalama'));
+  assert.match(visit.toUser()[0].text, /I cannot set a time myself/);
+  assert.ok(visit.toUser().some((m) => buttons(m).includes('action:visit:p04')), 'a visit button is offered');
+});
+
+test('a rental label is not trusted for a question about a listing\'s rent, because the model could be wrong', async () => {
+  const h = harness({ route: '{"label":"topic","topic":"rent_yield"}' });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+  await h.send(say('what is the rental yield on this'));
+  assert.doesNotMatch(h.toUser()[0].text, /^We only sell properties/);
+});
+
+test('a visit label with no property on screen is left to the main agent, which can offer the button', async () => {
+  let agentAsked = 0;
+  const h = harness({ route: '{"label":"visit_time","topic":null}', generate: async () => (agentAsked++, { text: 'Which property would you like to visit?' }) });
+  await seedLead(h, {}, 'interested');
+  await h.send(say('Can we schedule a visit to the Guindy hotel?'));
+  assert.equal(agentAsked, 1);
+  assert.doesNotMatch(h.toUser()[0].text, /I cannot set a time myself/);
+});

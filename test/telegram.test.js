@@ -1168,3 +1168,171 @@ test('a visit label with no property on screen is left to the main agent, which 
   assert.equal(agentAsked, 1);
   assert.doesNotMatch(h.toUser()[0].text, /I cannot set a time myself/);
 });
+
+// ---- human handoff ---------------------------------------------------------------------------
+
+const fromTeam = (text, replyToMessageId) => {
+  const update = say(text, SALES);
+  if (replyToMessageId) update.message.reply_to_message = { message_id: replyToMessageId, date: 0, chat: privateChat(SALES), from: { id: 123, is_bot: true, first_name: 'Bot' }, text: 'alert' };
+  return update;
+};
+const alertMessageId = (h) => h.rows('handoffs')[0].alert_message_id;
+
+async function requestVisit(h, propertyId = 'p04') {
+  await seedLead(h, { budgetMax: 7000000 }, 'interested');
+  await h.send(tap(`action:visit:${propertyId}`));
+}
+
+test('a visit request becomes a request on the board and an alert the team can reply to', async () => {
+  const h = harness();
+  await requestVisit(h);
+
+  const [handoff] = h.rows('handoffs');
+  assert.equal(handoff.kind, 'visit');
+  assert.equal(handoff.status, 'open');
+  assert.equal(handoff.property_id, 'p04');
+  assert.ok(handoff.alert_message_id, 'the alert is remembered so a reply to it finds this request');
+  const alert = h.toSales().at(-1);
+  assert.match(alert.text, /Site visit requested/);
+  assert.match(alert.text, /Reply to this message to answer the customer/);
+  assert.deepEqual(buttons(alert), [`action:resolve:${handoff.id}`]);
+});
+
+test('the team replies to the alert on Telegram and the customer receives it', async () => {
+  const h = harness();
+  await requestVisit(h);
+
+  await h.send(fromTeam('Saturday 11am works. See you at the site.', alertMessageId(h)));
+
+  const toCustomer = h.toUser().at(-1);
+  assert.match(toCustomer.text, /Message from our team/);
+  assert.match(toCustomer.text, /Saturday 11am works/);
+  assert.match(h.toSales().at(-1).text, /Sent\. Request #\d+ now waits for the customer/);
+
+  const [handoff] = h.rows('handoffs');
+  assert.equal(handoff.status, 'waiting_customer');
+  const staffEntry = h.rows('handoff_messages').find((m) => m.direction === 'staff');
+  assert.equal(staffEntry.via, 'telegram');
+  assert.equal(staffEntry.text, 'Saturday 11am works. See you at the site.');
+});
+
+test('the customer\'s answer reaches the team on the same thread, once, and the bot still answers', async () => {
+  const h = harness({ generate: async () => ({ text: 'Happy to help.' }) });
+  await requestVisit(h);
+  await h.send(fromTeam('Does Saturday 11am work for you?', alertMessageId(h)));
+
+  await h.send(say('yes that works'));
+
+  const toTeam = h.toSales().at(-1);
+  assert.match(toTeam.text, /yes that works/);
+  assert.equal(toTeam.reply_parameters.message_id, alertMessageId(h), 'shown under the original alert');
+  assert.equal(h.rows('handoffs')[0].status, 'open', 'the ball is back with the team');
+  assert.ok(h.rows('handoff_messages').some((m) => m.direction === 'customer' && m.text === 'yes that works'));
+
+  // Only the first answer is passed on; the next message is an ordinary one.
+  const before = h.toSales().length;
+  await h.send(say('show me villas'));
+  assert.equal(h.toSales().length, before);
+
+  // The team can reply to that forwarded message too, and it finds the same request.
+  const forwarded = h.calls.filter((c) => c.method === 'sendMessage' && c.payload.chat_id === SALES && /yes that works/.test(c.payload.text)).length;
+  assert.equal(forwarded, 1);
+});
+
+test('only listed team accounts can reply through an alert', async () => {
+  const h = harness();
+  await requestVisit(h);
+  const stranger = say('give me a discount please', 31337);
+  stranger.message.reply_to_message = { message_id: alertMessageId(h), date: 0, chat: privateChat(SALES), text: 'alert' };
+
+  await h.send(stranger);
+
+  assert.ok(!h.toUser().some((m) => /Message from our team/.test(m.text)));
+  assert.equal(h.rows('handoff_messages').filter((m) => m.direction === 'staff').length, 0);
+});
+
+test('a plain message from the team account, not a reply, is an ordinary customer message', async () => {
+  const h = harness({ generate: async () => ({ text: 'ok' }) });
+  await requestVisit(h);
+  await h.send(fromTeam('what are your office hours'));
+  assert.equal(h.rows('handoff_messages').filter((m) => m.direction === 'staff').length, 0);
+  assert.match(h.toSales().at(-1).text, /Mon to Sat, 10am to 7pm/);
+});
+
+test('"Mark resolved" closes the request, for the team only', async () => {
+  const h = harness();
+  await requestVisit(h);
+  const id = h.rows('handoffs')[0].id;
+
+  await h.send(tap(`action:resolve:${id}`, 31337));
+  assert.equal(h.rows('handoffs')[0].status, 'open');
+
+  await h.send(tap(`action:resolve:${id}`, SALES));
+  const handoff = h.rows('handoffs')[0];
+  assert.equal(handoff.status, 'resolved');
+  assert.equal(handoff.resolved_by, `telegram:${SALES}`);
+});
+
+test('a price offer is passed to the team, once per property, and the customer is told', async () => {
+  const h = harness({ route: null });
+  await seedLead(h, { budgetMax: 7000000 }, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+
+  await h.send(say('can i get for 54L'));
+  assert.match(h.toUser()[0].text, /I have passed your offer of ₹54 L to our sales team/);
+  assert.equal(h.rows('handoffs').length, 1);
+  assert.equal(h.rows('handoffs')[0].kind, 'offer');
+  assert.match(h.toSales()[0].text, /Offered ₹54 L for High-Rise 2BHK Apartment near Tech Parks/);
+
+  await h.send(say('how about 56L'));
+  assert.equal(h.rows('handoffs').length, 1, 'the same conversation, not a second request');
+  assert.equal(h.rows('handoff_messages').filter((m) => m.direction === 'customer').length, 2);
+  assert.equal(h.toSales().at(-1).reply_parameters.message_id, alertMessageId(h), 'shown under the first alert');
+});
+
+test('asking for a call back passes the request to the team', async () => {
+  const h = harness({ route: '{"label":"topic","topic":"contact"}' });
+  await seedLead(h, {}, 'interested');
+  await h.send(say('can someone call me tomorrow'));
+
+  assert.equal(h.rows('handoffs')[0].kind, 'callback');
+  assert.match(h.toUser()[0].text, /I have passed your request to our team/);
+  assert.match(h.toSales()[0].text, /Asked to talk to the team/);
+});
+
+test('a question the assistant cannot answer is passed to the team, and the customer is told', async () => {
+  const h = harness({ route: null });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+  await h.send(say('Does the building have a rooftop garden?'));
+
+  assert.equal(h.rows('handoffs')[0].kind, 'question');
+  assert.match(h.toUser()[0].text, /I have also passed your question to our team/);
+  assert.match(h.toSales()[0].text, /rooftop garden/);
+});
+
+test('before sql/007 is run, the team is still alerted and nothing breaks', async () => {
+  const h = harness({ route: null });
+  const real = h.supabase.from;
+  const missing = { data: null, error: { code: 'PGRST205', message: "Could not find the table 'public.handoffs' in the schema cache" } };
+  const chain = new Proxy({}, { get: (_t, prop) => (prop === 'then' ? (resolve) => resolve(missing) : () => chain) });
+  h.supabase.from = (name) => (name === 'handoffs' || name === 'handoff_messages' ? chain : real(name));
+
+  await requestVisit(h);
+
+  assert.match(h.toSales().at(-1).text, /Site visit requested/);
+  assert.ok(h.toUser().some((m) => /request|visit/i.test(m.text)), 'the customer still gets the visit confirmation');
+});
+
+test('forgetting a customer removes their requests and threads', async () => {
+  const h = harness();
+  await requestVisit(h);
+  await h.send(fromTeam('hello', alertMessageId(h)));
+  assert.equal(h.rows('handoffs').length, 1);
+
+  await h.send(say('/forget'));
+  await h.send(tap('action:forget:yes'));
+
+  assert.equal(h.rows('handoffs').length, 0);
+  assert.equal(h.rows('handoff_messages').length, 0);
+});

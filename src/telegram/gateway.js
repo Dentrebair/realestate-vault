@@ -10,7 +10,7 @@ import { POR_LABEL, formatInr, priceDisplay } from '../money.js';
 import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { photosAnswer, PHOTOS_GENERAL } from './copy.js';
-import { DEFAULT_REPLIES, fieldAnswer, hasSearchIntent, isQuestion, topicOf } from './facts.js';
+import { DEFAULT_REPLIES, TOPICS, fieldAnswer, hasSearchIntent, isQuestion, topicOf } from './facts.js';
 import { asksAboutPhotos, isNegotiation, isPriceOffer, offeredAmount, wantsRental } from './intent.js';
 
 const STATUS_WORDS = { available: 'Available', under_construction: 'Under construction', reserved: 'Reserved', sold: 'Sold' };
@@ -122,6 +122,8 @@ export async function answerFromData({ text, lead, supabase, config: given = app
       ).catch(() => {});
       return {
         reply: `I cannot agree a price or a discount. ${found.row.title} is listed ${listed}. Pricing is handled by our sales team: request a site visit and they can discuss your offer of ${formatInr(amount)}.`,
+        // Used instead when the team really has been told about the offer.
+        passedReply: `I cannot agree a price or a discount. ${found.row.title} is listed ${listed}. I have passed your offer of ${formatInr(amount)} to our sales team. You can also request a site visit so they can discuss it.`,
         visitFor: found.row.property_id
       };
     }
@@ -199,7 +201,8 @@ export async function answerFromData({ text, lead, supabase, config: given = app
   }
 
   // ---- questions we may or may not be able to answer ----
-  const topic = topicOf(t);
+  // Asking for a call or a person is routed by the model when it recognises it; the keyword rule is the fallback.
+  const topic = (route?.label === 'topic' && route.topic === 'contact' ? TOPICS.find((x) => x.key === 'contact') : null) ?? topicOf(t);
   if (!topic) return null;
 
   if (topic.kind === 'listing_detail') {
@@ -250,6 +253,12 @@ export async function answerFromData({ text, lead, supabase, config: given = app
   // policy
   const entry = await findEntry(supabase, { topic: topic.key });
   if (entry) return serve(supabase, entry);
+  if (topic.key === 'contact') {
+    return {
+      reply: DEFAULT_REPLIES.contact(),
+      handoff: { kind: 'callback', summary: `Asked to talk to the team: "${t.slice(0, 200)}"`, doneReply: 'I have passed your request to our team. They will reply here.' }
+    };
+  }
   return gapReply({ supabase, lead, text: t, topic, shown, reply: DEFAULT_REPLIES[topic.key]() });
 }
 
@@ -284,5 +293,15 @@ async function gapReply({ supabase, lead, text, topic, shown, property = null, a
   } catch (error) {
     console.error('Could not save a knowledge gap:', error.message);
   }
-  return { reply, gapId };
+  return {
+    reply,
+    gapId,
+    // The team is told as well, and the customer is told that they have been.
+    handoff: {
+      kind: 'question',
+      summary: text.slice(0, 300),
+      property: property ? { id: property.property_id, title: property.title, priceDisplay: priceDisplay(property.price_inr) } : null,
+      doneReply: `${reply} I have also passed your question to our team.`
+    }
+  };
 }

@@ -5,14 +5,15 @@ import { getProperty } from '../propertySearch.js';
 import { escapeHtml as esc } from './html.js';
 import { log } from './log.js';
 
-export async function notifySales(api, chatId, html) {
+// Sends one alert. Returns the message Telegram created (truthy) or false, so a reply to it can be matched to a request.
+export async function notifySales(api, chatId, html, options = {}) {
   if (!chatId) {
     console.warn('SALES_DESK_CHAT_ID is not set; alert not sent.');
     return false;
   }
   try {
-    await api.sendMessage(chatId, html, { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
-    return true;
+    const message = await api.sendMessage(chatId, html, { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, ...options });
+    return message ?? true;
   } catch (error) {
     console.error('Sales desk alert failed:', error.message);
     return false;

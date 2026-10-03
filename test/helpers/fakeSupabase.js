@@ -19,11 +19,13 @@ const DEFAULTS = {
   audit_log: () => ({ detail: {} }),
   deletion_log: () => ({ removed: {} }),
   knowledge_gaps: () => ({ status: 'open', times: 1, request: {}, is_test: false, entry_id: null }),
-  knowledge_entries: () => ({ active: true, served_count: 0, keywords: [] })
+  knowledge_entries: () => ({ active: true, served_count: 0, keywords: [] }),
+  handoffs: () => ({ status: 'open', is_test: false }),
+  handoff_messages: () => ({})
 };
 
 const UNIQUE_KEYS = { telegram_updates: 'update_id' };
-const IDENTITY_TABLES = new Set(['property_photos', 'knowledge_gaps', 'knowledge_entries', 'audit_log', 'deletion_log']);
+const IDENTITY_TABLES = new Set(['handoffs', 'handoff_messages', 'property_photos', 'knowledge_gaps', 'knowledge_entries', 'audit_log', 'deletion_log']);
 
 let clock = 0;
 let nextId = 1;
@@ -142,9 +144,11 @@ export function createFakeSupabase(seed = {}) {
         // Deleting a lead removes what hangs off it, as the foreign keys with "on delete cascade" do.
         if (name === 'customer_leads') {
           const gone = new Set(affected.map((r) => r.customer_id));
-          for (const child of ['chat_messages', 'lead_events']) {
+          for (const child of ['chat_messages', 'lead_events', 'handoffs']) {
             if (tables[child]) tables[child] = tables[child].filter((r) => !gone.has(r.customer_id));
           }
+          const kept = new Set((tables.handoffs ?? []).map((r) => r.id));
+          if (tables.handoff_messages) tables.handoff_messages = tables.handoff_messages.filter((r) => kept.has(r.handoff_id));
         }
       }
 

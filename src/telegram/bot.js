@@ -2,6 +2,7 @@
 import { Bot } from 'grammy';
 import { createOpenAI } from '@ai-sdk/openai';
 import { handleCallback } from './callbacks.js';
+import { staffReply } from './handoff.js';
 import { contact, forget, help, mydata, privacy, reset, saved, start } from './commands.js';
 import { HELP, NON_TEXT, RATE_LIMIT_PER_HOUR } from './copy.js';
 import { createDedupe, createQueue, createRateLimiter } from './guards.js';
@@ -71,6 +72,8 @@ export function createBot({ token, botInfo, supabase, config, ai }) {
 
   bot.on('callback_query:data', (ctx) => handleCallback(ctx, deps));
   bot.on('message:contact', (ctx) => contact(ctx, deps));
+  // A reply from the team to one of the alerts goes to the customer; anything else is an ordinary message.
+  bot.on('message:text', async (ctx, next) => ((await staffReply(ctx, deps)) ? undefined : next()));
   bot.on('message:text', (ctx) =>
     ctx.message.text.startsWith('/') ? ctx.reply(HELP) : handleText(ctx, deps)
   );

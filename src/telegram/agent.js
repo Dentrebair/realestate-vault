@@ -197,6 +197,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
   // describe an empty or partial result, which is where it used to name areas from its own memory.
   let reply;
   let blocked = false;
+  let gapNoted = false;
   if (state.narration) {
     reply = state.narration;
   } else {
@@ -214,7 +215,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     const before = reply;
     reply = cardsFollow(reply);
     reply = truthful(reply, allowedContext({ lead, history, text, state, entries }));
-    await noteGap({ supabase, lead, text, state, modelReply: before, finalReply: reply });
+    gapNoted = await noteGap({ supabase, lead, text, state, modelReply: before, finalReply: reply });
   }
 
   if (!reply) {
@@ -227,6 +228,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
     text: withoutDashes(reply).slice(0, MAX_REPLY_CHARS),
     blocked,
     shown: state.shown,
+    gapNoted,
     sendCards: state.sendCards,
     usage: result.usage
   };
@@ -239,8 +241,8 @@ const NOT_KNOWN = /\b(i do not have|i don'?t have|does not mention|doesn'?t ment
 async function noteGap({ supabase, lead, text, state, modelReply, finalReply }) {
   const removed = sentencesOf(modelReply).filter((s) => !finalReply.includes(s));
   const refused = NOT_KNOWN.test(finalReply);
-  if (!removed.length && !refused) return;
-  if (!isQuestionLike(text)) return;
+  if (!removed.length && !refused) return false;
+  if (!isQuestionLike(text)) return false;
 
   const property = state.shown.length === 1 ? state.shown[0] : null;
   try {
@@ -260,8 +262,10 @@ async function noteGap({ supabase, lead, text, state, modelReply, finalReply }) 
         leadStage: lead.leadStage
       }
     });
+    return true;
   } catch (error) {
     console.error('Could not save a knowledge gap:', error.message);
+    return false;
   }
 }
 

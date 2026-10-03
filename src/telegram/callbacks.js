@@ -17,18 +17,24 @@ import { STALE_PROPERTY, SHARE_NUMBER_PROMPT, VISIT_ALREADY, visitRecorded, welc
 import { saveMessage } from './history.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { rememberShown, sendSearchResult } from './present.js';
-import { notifySales, visitAlert } from './sales.js';
+import { raiseHandoff, resolveFromTelegram } from './handoff.js';
 import { Keyboard } from 'grammy';
 
 const SHOWABLE = ['available', 'under_construction'];
 
 export async function handleCallback(ctx, deps) {
-  const match = /^action:(visit|save|unsave|more|browse|ph|noop|consent|privacy|forget)(?::(.+))?$/.exec(ctx.callbackQuery.data ?? '');
+  const match = /^action:(visit|save|unsave|more|browse|ph|noop|consent|privacy|forget|resolve)(?::(.+))?$/.exec(ctx.callbackQuery.data ?? '');
   let answer = {};
 
   try {
     if (!match) return;
     const [, action, arg] = match;
+
+    // The team's button is not a customer action, so it never waits for consent.
+    if (action === 'resolve') {
+      answer = await resolveFromTelegram(ctx, deps, arg);
+      return;
+    }
 
     // Everything except agreeing, reading the notice and deleting data waits for consent.
     if (!['consent', 'privacy', 'forget', 'noop'].includes(action)) {
@@ -88,8 +94,14 @@ async function visit(ctx, deps, propertyId) {
   }
 
   const fresh = await getLead(supabase, customerId);
-  const sent = await notifySales(api, config.salesDeskChatId, visitAlert(fresh, found.view));
-  if (sent) {
+  const { alerted } = await raiseHandoff({
+    deps,
+    lead: fresh,
+    kind: 'visit',
+    summary: `Asked to visit ${found.view.title}`,
+    property: found.view
+  });
+  if (alerted) {
     await supabase
       .from('lead_events')
       .update({ alerted_at: new Date().toISOString() })

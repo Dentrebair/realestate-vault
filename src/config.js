@@ -32,6 +32,8 @@ const configSchema = z.object({
   telegramMode: z.enum(['polling', 'webhook']).optional(),
   publicBaseUrl: z.string().url().optional(),
   salesDeskChatId: z.coerce.number().int().optional(),
+  // Telegram accounts whose replies to an alert are passed to the customer. Defaults to the Sales desk chat when that is a person.
+  staffTelegramIds: z.array(z.number().int()).default([]),
   businessHours: z.string().min(1).default('Mon to Sat, 10am to 7pm IST'),
   // Privacy. The notice names the business and says how to reach it; retention is how long data is kept.
   businessName: z.string().min(1).default('our property team'),
@@ -77,6 +79,11 @@ const parsed = configSchema.safeParse({
   telegramMode: blank(process.env.TELEGRAM_MODE),
   publicBaseUrl: normalizeUrl(blank(process.env.PUBLIC_BASE_URL) ?? publicDomain),
   salesDeskChatId: blank(process.env.SALES_DESK_CHAT_ID),
+  staffTelegramIds: (blank(process.env.STAFF_TELEGRAM_IDS) ?? '')
+    .split(',')
+    .map((id) => id.trim())
+    .filter(Boolean)
+    .map(Number),
   businessHours: blank(process.env.BUSINESS_HOURS),
   teamConfirmLine: blank(process.env.TEAM_CONFIRM_LINE),
   businessName: blank(process.env.BUSINESS_NAME),

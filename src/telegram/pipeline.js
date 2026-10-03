@@ -1,11 +1,12 @@
 // A text message from a Lead: guards, memory, the model, and the reply.
 import { setBotState, setStage } from '../leadMemory.js';
+import { formatInr } from '../money.js';
 import { runAgentTurn } from './agent.js';
 import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, RATE_LIMITED, TOO_LONG } from './copy.js';
 import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { visitPrompt } from './cards.js';
-import { answerFromData } from './gateway.js';
+import { answerFromData, referenced } from './gateway.js';
 import { rememberShown, sendCard } from './present.js';
 import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
@@ -13,6 +14,7 @@ import { consentPrompt, needsConsent } from './consent.js';
 import { judgeNegotiation } from './negotiation.js';
 import { routeMessage } from './router.js';
 import { customerIdOf, ensureLead } from './lead.js';
+import { raiseHandoff, relayCustomer } from './handoff.js';
 import { failureAlert, notifySales } from './sales.js';
 import { scopeOf } from './scope.js';
 
@@ -62,11 +64,29 @@ export async function handleText(ctx, deps) {
     judgeNegotiation({ text, shown: shownNow, deps: deps.agent }),
     routeMessage({ text, shown: shownNow, deps: deps.agent })
   ]);
+  // The customer answers something the team wrote: the team sees it on the same thread. The bot carries on as normal.
+  await relayCustomer({ deps, lead, text }).catch((error) => log('relay_failed', { customerId, error: error.message }, 'error'));
+
+  let passedOn = false;
   if (judged.negotiating) {
     await setStage(supabase, customerId, 'negotiating', {
       actor: 'system',
       reason: judged.offer ? 'made a price offer' : 'asked about price or a discount'
     }).catch((error) => log('stage_failed', { customerId, error: error.message }, 'error'));
+
+    // Price is the team's to decide, so they are told, with the offer if there was one.
+    if (shownNow.length) {
+      const ref = referenced(text, shownNow);
+      const property = ref.property ?? (shownNow.length === 1 ? shownNow[0] : null);
+      const summary = judged.offer
+        ? `Offered ${formatInr(judged.offer)}${property ? ` for ${property.title} (listed ${property.priceDisplay})` : ''}`
+        : `Asked about a discount or whether the price can change${property ? ` on ${property.title} (listed ${property.priceDisplay})` : ''}`;
+      const raised = await raiseHandoff({ deps, lead, kind: 'offer', summary, property }).catch((error) => {
+        log('handoff_failed', { customerId, error: error.message }, 'error');
+        return null;
+      });
+      passedOn = Boolean(raised && (raised.handoff || raised.alerted));
+    }
   }
 
   // Factual questions are answered from data, before the model is asked anything. If we cannot answer,
@@ -74,9 +94,18 @@ export async function handleText(ctx, deps) {
   try {
     const answered = await answerFromData({ text, lead, supabase, config, intent: judged, route });
     if (answered) {
+      let reply = answered.reply;
+      if (answered.passedReply && passedOn) reply = answered.passedReply;
+      if (answered.handoff) {
+        const raised = await raiseHandoff({ deps, lead, kind: answered.handoff.kind, summary: answered.handoff.summary, property: answered.handoff.property ?? null }).catch((error) => {
+          log('handoff_failed', { customerId, error: error.message }, 'error');
+          return null;
+        });
+        if (raised && (raised.handoff || raised.alerted)) reply = answered.handoff.doneReply ?? reply;
+      }
       await saveMessage(supabase, customerId, 'user', text);
-      await ctx.reply(answered.reply);
-      await saveMessage(supabase, customerId, 'assistant', answered.reply);
+      await ctx.reply(reply);
+      await saveMessage(supabase, customerId, 'assistant', reply);
       if (answered.cardFor) {
         const found = await getProperty(supabase, answered.cardFor);
         if (found) {
@@ -109,9 +138,19 @@ export async function handleText(ctx, deps) {
 
     const turn = await runAgentTurn({ deps: deps.agent, supabase, api, chatId, lead, history, text });
 
-    await ctx.reply(turn.text);
+    let replyText = turn.text;
+    if (turn.gapNoted) {
+      // The assistant had to say "I do not have that": the team is told, and so is the customer.
+      const property = turn.shown.length === 1 ? turn.shown[0] : null;
+      const raised = await raiseHandoff({ deps, lead, kind: 'question', summary: text.slice(0, 300), property }).catch((error) => {
+        log('handoff_failed', { customerId, error: error.message }, 'error');
+        return null;
+      });
+      if (raised && (raised.handoff || raised.alerted)) replyText = `${replyText} I have also passed your question to our team.`;
+    }
+    await ctx.reply(replyText);
     await turn.sendCards?.();
-    await saveMessage(supabase, customerId, 'assistant', turn.text, { shown: turn.shown.map((s) => s.id) });
+    await saveMessage(supabase, customerId, 'assistant', replyText, { shown: turn.shown.map((s) => s.id) });
     log('turn', { customerId, ms: Date.now() - started, blocked: turn.blocked, usage: turn.usage });
   } catch (error) {
     log('turn_failed', { customerId, ms: Date.now() - started, error: error.message }, 'error');

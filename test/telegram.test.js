@@ -1117,3 +1117,22 @@ test('the model says it is a search, so an hours-like word in a search does not 
   await h.send(say('show me flats with opening hours near the clinic'));
   assert.doesNotMatch(h.toUser()[0]?.text ?? '', /Mon to Sat/);
 });
+
+test('a question about stamp duty or other charges is not answered with the price of the property on screen', async () => {
+  for (const [message, route] of [['how much is stamp duty', null], ['how much is stamp duty', '{"label":"topic","topic":"loan"}'], ['what is the registration cost', null]]) {
+    const h = harness({ route, generate: async () => ({ text: 'ok' }) });
+    await seedLead(h, {}, 'interested');
+    await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+    await h.send(say(message));
+    assert.doesNotMatch(h.toUser()[0].text, /listed price of/, `${message} (${route ?? 'rules'})`);
+    assert.match(h.toUser()[0].text, /cannot advise on loans, taxes/, message);
+  }
+});
+
+test('the model recognises price questions the keyword rules miss', async () => {
+  const h = harness({ route: '{"label":"price_question","topic":null}', generate: async () => { throw new Error('the model must not write this'); } });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04', 'p16') });
+  await h.send(say('second one evlo price'));
+  assert.match(h.toUser()[0].text, /The listed price of Compact 1BHK Starter Flat is ₹28 L/);
+});

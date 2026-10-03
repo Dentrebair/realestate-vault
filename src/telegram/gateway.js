@@ -65,7 +65,12 @@ const HOURS = /\b(office|working|business|opening|open) (hours|timings?)\b|\bwhe
 const HUMAN = /\b(real (person|human)|am i (talking|speaking|chatting) to|are you (a |an )?(bot|robot|human|real|ai|person|machine))\b/i;
 const VISIT_TIME = /\b(visit|see|view|come|drop by|tour)\b[^.?!]*\b(tomorrow|today|tonight|weekend|saturday|sunday|monday|tuesday|wednesday|thursday|friday|\d{1,2}(:\d\d)?\s?(am|pm)|at \d)\b/i;
 const COMPARE = /\bwhich\b[^.?!]*\b(is|are|would be)\b[^.?!]*\b(better|best)\b|\bwhich (one )?(would|should) (you|i)\b|\b(do )?you recommend\b|\bbetter of the\b|\bcompare\b/i;
-export const asksPrice = (t) => /\b(price|cost|how much|asking)\b/i.test(t) && isQuestion(t) && !/\b(per sq|market|average|trend|forecast|appreciat\w*|worth it)\b/i.test(t);
+export const asksPrice = (t) =>
+  /\b(price|cost|how much|asking)\b/i.test(t) &&
+  isQuestion(t) &&
+  !/\b(per sq|market|average|trend|forecast|appreciat\w*|worth it)\b/i.test(t) &&
+  // charges and taxes are not the price of a property
+  !/\b(stamp duty|registration|tax|gst|emi|loan|interest|brokerage|maintenance|deposit|booking amount)\b/i.test(t);
 export const asksCount = (t) => /\bhow many\b[^.?!]*\b(propert\w+|listings?|flats?|homes?|plots?|options|units)\b/i.test(t) && !hasSearchIntent(t.replace(/how many/i, ''));
 export const asksAvailability = (t) => /\b(still |currently )?(available|vacant|sold|taken|on sale)\b/i.test(t) && isQuestion(t) && !hasSearchIntent(t);
 export const asksOtherCity = (t) => CITIES.test(t) && (isQuestion(t) || /\bdo you have\b/i.test(t));
@@ -122,7 +127,7 @@ export async function answerFromData({ text, lead, supabase, config: given = app
   }
 
   // ---- "what is the price of X": answer it, naming the listing, and show it if it is not already on screen ----
-  if (asksPrice(t) && !negotiating) {
+  if (says('price_question', asksPrice) && !negotiating) {
     const named = await findByName(supabase, t, config.propertiesTable).catch(() => null);
     let row = named;
     if (!row && !hasSearchIntent(t)) {

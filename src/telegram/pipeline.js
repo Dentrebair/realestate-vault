@@ -2,7 +2,8 @@
 import { setBotState, setStage } from '../leadMemory.js';
 import { formatInr } from '../money.js';
 import { runAgentTurn } from './agent.js';
-import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, RATE_LIMITED, TOO_LONG } from './copy.js';
+import { FALLBACK, MAX_MESSAGE_CHARS, OFF_TOPIC, RATE_LIMITED, TEAM_ACK, TOO_LONG } from './copy.js';
+import { hasSearchIntent } from './facts.js';
 import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { visitPrompt } from './cards.js';
@@ -65,7 +66,10 @@ export async function handleText(ctx, deps) {
     routeMessage({ text, shown: shownNow, deps: deps.agent })
   ]);
   // The customer answers something the team wrote: the team sees it on the same thread. The bot carries on as normal.
-  await relayCustomer({ deps, lead, text }).catch((error) => log('relay_failed', { customerId, error: error.message }, 'error'));
+  const relayed = await relayCustomer({ deps, lead, text }).catch((error) => {
+    log('relay_failed', { customerId, error: error.message }, 'error');
+    return null;
+  });
 
   let passedOn = false;
   if (judged.negotiating) {
@@ -87,6 +91,16 @@ export async function handleText(ctx, deps) {
       });
       passedOn = Boolean(raised && (raised.handoff || raised.alerted));
     }
+  }
+
+  // A short reply to what the team wrote ("Saturday works") is for the team. The assistant only says it was passed on,
+  // so it does not guess at times or prices. A question, a search or an offer still gets its normal handling.
+  const words = text.trim().split(/\s+/).length;
+  if (relayed && !judged.negotiating && words <= 12 && !text.includes('?') && !hasSearchIntent(text)) {
+    await saveMessage(supabase, customerId, 'user', text);
+    await ctx.reply(TEAM_ACK);
+    await saveMessage(supabase, customerId, 'assistant', TEAM_ACK);
+    return;
   }
 
   // Factual questions are answered from data, before the model is asked anything. If we cannot answer,

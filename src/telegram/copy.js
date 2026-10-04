@@ -64,3 +64,8 @@ export function photosAnswer(items) {
   const tail = anyMissing ? '\n\nThe best way to see a property without photos is a site visit. Tap Book Site Visit on its card.' : '';
   return `${lines.join('\n')}${tail}`;
 }
+
+// What the team wrote to a customer is kept in the conversation under this prefix, so the assistant knows what a later
+// "yes, Saturday works" refers to, and may repeat what the team said.
+export const TEAM_PREFIX = 'Message from our team: ';
+export const TEAM_ACK = 'Thanks, I have passed that to our team. They will confirm here.';

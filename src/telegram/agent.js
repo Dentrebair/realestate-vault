@@ -11,6 +11,7 @@ import { narrateSearch } from './narrate.js';
 import { recordGap, relevantEntries } from '../knowledge.js';
 import { locateProperty } from '../microMarkets.js';
 import { sentencesOf, truthful } from './truthguard.js';
+import { TEAM_PREFIX } from './copy.js';
 import { prepareSearchResult, rememberShown } from './present.js';
 import { buildInstructions } from './systemPrompt.js';
 
@@ -201,7 +202,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
   if (state.narration) {
     reply = state.narration;
   } else {
-    const guarded = guardAmounts(result.text ?? '', [text, JSON.stringify(leadBudgets(lead)), ...state.toolOutputs], text);
+    const guarded = guardAmounts(result.text ?? '', [text, JSON.stringify(leadBudgets(lead)), ...state.toolOutputs, ...teamLines(history)], text);
     blocked = guarded.blocked;
     reply = guarded.blocked
       ? ''
@@ -271,6 +272,9 @@ async function noteGap({ supabase, lead, text, state, modelReply, finalReply }) 
 
 const isQuestionLike = (text) => /\?|^\s*(is|are|does|do|can|could|will|would|what|which|how|when|where|who|tell me|any)\b/i.test(text);
 
+// What the team has told this customer. It is theirs to say, so the assistant may repeat it.
+const teamLines = (history) => history.filter((m) => m.role === 'assistant' && String(m.content).startsWith(TEAM_PREFIX)).map((m) => m.content);
+
 // Everything a reply may draw on: tool results, what the customer has said, their saved profile and what was shown.
 function allowedContext({ lead, history, text, state, entries = [] }) {
   return [
@@ -278,6 +282,7 @@ function allowedContext({ lead, history, text, state, entries = [] }) {
     ...entries.map((e) => `${e.answer} ${e.area ?? ''}`),
     text,
     ...history.filter((m) => m.role === 'user').map((m) => m.content),
+    ...teamLines(history),
     JSON.stringify({ areas: lead.preferredLocations, categories: lead.propertyCategories }),
     ...state.shown.map((p) => `${p.title} ${p.location}`)
   ].join(' ');

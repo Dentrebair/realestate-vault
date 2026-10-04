@@ -1336,3 +1336,54 @@ test('forgetting a customer removes their requests and threads', async () => {
   assert.equal(h.rows('handoffs').length, 0);
   assert.equal(h.rows('handoff_messages').length, 0);
 });
+
+// ---- the assistant and the team's words ------------------------------------------------------
+
+test('what the team wrote is in the conversation the assistant reads, so a later "yes" has a meaning', async () => {
+  let seen = null;
+  const h = harness({ generate: async ({ messages }) => { seen = messages; return { text: 'Happy to help.' }; } });
+  await requestVisit(h);
+  await h.send(fromTeam('Does Saturday 11am work for you?', alertMessageId(h)));
+
+  await h.send(say('Saturday is fine, and can you tell me what is nearby?'));
+
+  assert.ok(seen.some((m) => m.role === 'assistant' && m.content === 'Message from our team: Does Saturday 11am work for you?'));
+});
+
+test('a short reply to the team gets a fixed acknowledgement, goes to the team, and the model is not asked', async () => {
+  let asked = 0;
+  const h = harness({ generate: async () => (asked++, { text: 'This should not be sent.' }) });
+  await requestVisit(h);
+  await h.send(fromTeam('Does Saturday 11am work for you?', alertMessageId(h)));
+  const before = h.toUser().length;
+
+  await h.send(say('yes Saturday works'));
+
+  assert.equal(asked, 0);
+  assert.equal(h.toUser().length, before + 1);
+  assert.equal(h.toUser().at(-1).text, 'Thanks, I have passed that to our team. They will confirm here.');
+  assert.match(h.toSales().at(-1).text, /yes Saturday works/);
+});
+
+test('a question, a search or an offer after the team\'s message is still handled normally', async () => {
+  for (const message of ['what are your office hours?', 'show me villas in ECR', 'ok then can i get for 55L']) {
+    let asked = 0;
+    const h = harness({ generate: async () => (asked++, { text: 'Here you go.' }) });
+    await requestVisit(h);
+    await h.send(fromTeam('Does Saturday 11am work for you?', alertMessageId(h)));
+
+    await h.send(say(message));
+
+    assert.ok(!h.toUser().some((m) => m.text === 'Thanks, I have passed that to our team. They will confirm here.'), message);
+  }
+});
+
+test('an amount the team gave may be repeated by the assistant and is not blocked as invented', async () => {
+  const h = harness({ generate: async () => ({ text: 'The team said the owner can do ₹58 L, and the visit is Saturday.' }) });
+  await requestVisit(h);
+  await h.send(fromTeam('The owner can do ₹58 L.', alertMessageId(h)));
+
+  await h.send(say('Saturday is fine, and what did they say about the price again?'));
+
+  assert.match(h.toUser().at(-1).text, /₹58 L/);
+});

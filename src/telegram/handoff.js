@@ -10,7 +10,9 @@ import {
   OPEN, addMessage, attachStaffMessage, awaitingCustomer, findByStaffMessage, getHandoff, openHandoff, recordAlert, setStatus
 } from '../handoff.js';
 import { formatInr } from '../money.js';
+import { TEAM_PREFIX } from './copy.js';
 import { escapeHtml as esc } from './html.js';
+import { saveMessage } from './history.js';
 import { log } from './log.js';
 import { notifySales, visitAlert } from './sales.js';
 
@@ -112,6 +114,8 @@ export async function replyToCustomer({ deps, handoff, text, by, via }) {
   }
 
   await addMessage(supabase, handoff.id, { direction: 'staff', via, author: by, text: body });
+  // The assistant reads the conversation, so it must know what the team said.
+  await saveMessage(supabase, handoff.customerId, 'assistant', `${TEAM_PREFIX}${body}`, { team: true }).catch((error) => log('team_message_not_saved', { handoffId: handoff.id, error: error.message }, 'error'));
   if (handoff.status !== 'resolved') await setStatus(supabase, handoff.id, 'waiting_customer');
 
   // A reply written on the board is shown to the team on Telegram too, under the original alert.

@@ -309,8 +309,7 @@ A review of everything built, against the live database and the real model.
 
 **Open**
 - A customer's two quick messages can overwrite each other's profile changes once there is more than one copy of the bot. Keep one copy.
-- A model outage sends the team one failure alert per failed message. Throttle it.
-- Every unanswered question alerts the team at once. A curious customer can produce many pings; consider batching or a per-customer limit.
+- **Deferred to the next phase (owner's decision, 2026-10-06): alert throttling.** A model outage sends the team one failure alert per failed message, and every unanswered question alerts the team at once. Planned: limit failure alerts to one per few minutes, and batch or cap question alerts per customer.
 - ~~No automated test run on push~~ Done: a GitHub Action runs the tests on every push to `telegram` and on pull requests (277 tests, about a minute). Railway now deploys from GitHub on its own; to make it wait for the tests, turn on **Wait for CI** in the Railway service settings.
 - **Uptime monitoring: prepared, switched off until a client rollout.** `/health/ready` checks the database and that Telegram can still reach us, and `.github/workflows/uptime.yml` checks it every 10 minutes. GitHub runs scheduled checks only from the default branch, which is `main`, so the file does nothing while it sits on `telegram`. At rollout, pick one: copy the file to `main`; make `telegram` the default branch; or point a free outside monitor (UptimeRobot, Better Stack) at `/health/ready`.
 - The board reads at most 1000 leads and search reads at most 1000 listings, silently.
@@ -398,3 +397,4 @@ Commands (after P0):
 | 2026-10-06 | Audit of the whole build; nine fixes and an open list (see the Audit section). |
 | 2026-10-06 | Reply timers: wait time on the board, red when overdue (30 min visit, 2 hr other), reminders in business hours, one customer notice after 24 hours. |
 | 2026-10-06 | Tests run on every push (GitHub Action); readiness page `/health/ready`; uptime check prepared and deferred to client rollout; visit request with nothing on screen asks which property. |
+| 2026-10-06 | Alert throttling deferred to the next phase. |

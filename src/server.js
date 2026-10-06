@@ -30,6 +30,10 @@ if (isTelegramConfigured && isSupabaseConfigured && config.openaiApiKey) {
   console.warn('Telegram is configured but Supabase or OPENAI_API_KEY is missing; the bot is not started.');
 }
 
+if (isTelegramConfigured && !config.salesDeskChatId) {
+  console.warn('SALES_DESK_CHAT_ID is not set, so the team will not be alerted about visit requests, offers or questions. Set it to the Telegram id of the person who should receive them.');
+}
+
 if (supabase) startRetention(supabase, config);
 if (config.nodeEnv === 'production' && isTelegramConfigured && (!process.env.BUSINESS_NAME || !process.env.PRIVACY_CONTACT)) {
   console.warn('BUSINESS_NAME and PRIVACY_CONTACT are not set. The privacy notice will not name the business or say how to reach it.');

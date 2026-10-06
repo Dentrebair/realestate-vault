@@ -40,6 +40,8 @@ export function createApp({
       service: 'real-estate-meta-business-agent-connector',
       supabaseConfigured: isSupabaseConfigured,
       telegramConfigured: Boolean(telegramBot),
+      // Without this nobody is told about a visit request, an offer or a question. Set SALES_DESK_CHAT_ID.
+      teamAlertsConfigured: Boolean(config.salesDeskChatId),
       // Which commit is running, so a deploy that did not pick up the latest code is easy to spot.
       commit: (process.env.RAILWAY_GIT_COMMIT_SHA ?? '').slice(0, 7) || undefined
     });

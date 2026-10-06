@@ -1409,3 +1409,20 @@ test('tapping Book Site Visit again alerts the team if the first alert never arr
   assert.equal(told.toSales().length, 0, 'the team is not alerted twice');
   assert.match(told.toUser().at(-1).text, /already asked to visit/i);
 });
+
+test('a reply to a request already marked resolved reaches the customer and reopens it, so their answer comes back', async () => {
+  const h = harness({ generate: async () => ({ text: 'ok' }) });
+  await requestVisit(h);
+  const id = h.rows('handoffs')[0].id;
+  await h.send(tap(`action:resolve:${id}`, SALES));
+  assert.equal(h.rows('handoffs')[0].status, 'resolved');
+
+  await h.send(fromTeam('Sorry, one more thing: Saturday 11am?', alertMessageId(h)));
+
+  assert.match(h.toUser().at(-1).text, /Saturday 11am/);
+  assert.equal(h.rows('handoffs')[0].status, 'waiting_customer');
+  assert.equal(h.rows('handoffs')[0].resolved_by, null);
+
+  await h.send(say('yes works'));
+  assert.match(h.toSales().at(-1).text, /yes works/);
+});

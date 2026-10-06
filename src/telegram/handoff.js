@@ -116,7 +116,8 @@ export async function replyToCustomer({ deps, handoff, text, by, via }) {
   await addMessage(supabase, handoff.id, { direction: 'staff', via, author: by, text: body });
   // The assistant reads the conversation, so it must know what the team said.
   await saveMessage(supabase, handoff.customerId, 'assistant', `${TEAM_PREFIX}${body}`, { team: true }).catch((error) => log('team_message_not_saved', { handoffId: handoff.id, error: error.message }, 'error'));
-  if (handoff.status !== 'resolved') await setStatus(supabase, handoff.id, 'waiting_customer');
+  // Writing to the customer reopens a resolved request, so their answer comes back to the team.
+  await setStatus(supabase, handoff.id, 'waiting_customer');
 
   // A reply written on the board is shown to the team on Telegram too, under the original alert.
   if (via === 'board' && config.salesDeskChatId) {

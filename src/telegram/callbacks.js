@@ -65,23 +65,27 @@ async function visit(ctx, deps, propertyId) {
 
   const { data: earlier, error } = await supabase
     .from('lead_events')
-    .select('id')
+    .select('id,alerted_at')
     .eq('customer_id', customerId)
     .eq('event_type', 'site_visit_requested')
     .eq('property_id', propertyId)
-    .limit(1);
+    .limit(5);
   if (error) throw error;
-  if (earlier.length) {
+
+  // "Already asked" is only true if the team was told. A request whose alert never arrived is sent again now.
+  if (earlier.some((e) => e.alerted_at)) {
     await ctx.reply(VISIT_ALREADY);
     return { text: 'Already requested' };
   }
 
-  await setStage(supabase, customerId, 'site_visit_ready', {
-    actor: 'button',
-    propertyId,
-    reason: 'tapped Book Site Visit'
-  });
-  await recordEvent(supabase, customerId, 'site_visit_requested', { toStage: 'site_visit_ready', propertyId });
+  if (!earlier.length) {
+    await setStage(supabase, customerId, 'site_visit_ready', {
+      actor: 'button',
+      propertyId,
+      reason: 'tapped Book Site Visit'
+    });
+    await recordEvent(supabase, customerId, 'site_visit_requested', { toStage: 'site_visit_ready', propertyId });
+  }
 
   const confirmation = visitRecorded(found.view.title, config.businessHours);
   await ctx.reply(confirmation);

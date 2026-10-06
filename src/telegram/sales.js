@@ -3,6 +3,7 @@ import { formatInr } from '../money.js';
 import { getLead } from '../leadMemory.js';
 import { getProperty } from '../propertySearch.js';
 import { escapeHtml as esc } from './html.js';
+import { raiseHandoff } from './handoff.js';
 import { log } from './log.js';
 
 // Sends one alert. Returns the message Telegram created (truthy) or false, so a reply to it can be matched to a request.
@@ -70,7 +71,15 @@ export async function resendVisitAlerts({ supabase, api, chatId, now = () => Dat
   for (const event of data) {
     const [lead, found] = await Promise.all([getLead(supabase, event.customer_id), getProperty(supabase, event.property_id)]);
     if (!lead || !found) continue;
-    if (await notifySales(api, chatId, visitAlert(lead, found.view))) {
+    // Sent as a proper request, so the team can reply to the resent alert like any other.
+    const { alerted } = await raiseHandoff({
+      deps: { supabase, api, config: { salesDeskChatId: chatId } },
+      lead,
+      kind: 'visit',
+      summary: `Asked to visit ${found.view.title}`,
+      property: found.view
+    });
+    if (alerted) {
       await supabase.from('lead_events').update({ alerted_at: new Date(now()).toISOString() }).eq('id', event.id);
       sent++;
     }

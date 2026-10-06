@@ -1387,3 +1387,25 @@ test('an amount the team gave may be repeated by the assistant and is not blocke
 
   assert.match(h.toUser().at(-1).text, /₹58 L/);
 });
+
+test('tapping Book Site Visit again alerts the team if the first alert never arrived, and only says "already" if it did', async () => {
+  // The first request was recorded but the team was never told (for example no Sales desk chat was set).
+  const missed = harness();
+  await seedLead(missed, {}, 'site_visit_ready');
+  missed.supabase.tables.lead_events.push({ customer_id: ID, event_type: 'site_visit_requested', property_id: 'p04', alerted_at: null, created_at: '2026-10-02T10:00:00Z', payload: {} });
+
+  await missed.send(tap('action:visit:p04'));
+
+  assert.match(missed.toSales().at(-1).text, /Site visit requested/, 'the team is told now');
+  assert.ok(!missed.toUser().some((m) => /already asked/i.test(m.text)));
+  assert.ok(missed.rows('lead_events').find((e) => e.event_type === 'site_visit_requested').alerted_at, 'now marked as alerted');
+  assert.equal(missed.rows('lead_events').filter((e) => e.event_type === 'site_visit_requested').length, 1, 'no duplicate request is recorded');
+
+  // The team was told: a second tap is a repeat.
+  const told = harness();
+  await seedLead(told, {}, 'site_visit_ready');
+  told.supabase.tables.lead_events.push({ customer_id: ID, event_type: 'site_visit_requested', property_id: 'p04', alerted_at: '2026-10-02T10:00:05Z', created_at: '2026-10-02T10:00:00Z', payload: {} });
+  await told.send(tap('action:visit:p04'));
+  assert.equal(told.toSales().length, 0, 'the team is not alerted twice');
+  assert.match(told.toUser().at(-1).text, /already asked to visit/i);
+});

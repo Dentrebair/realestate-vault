@@ -1,0 +1,28 @@
+# Runs the tests on every push and pull request, so a change that breaks something is visible straight away.
+# The tests use an in-memory database and a fake Telegram, so they need no keys and cost nothing.
+name: Tests
+
+on:
+  push:
+    branches: [telegram]
+  pull_request:
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: npm test

@@ -1,7 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import express from 'express';
 import helmet from 'helmet';
-import { config, isSupabaseConfigured } from './config.js';
+import { config, isSupabaseConfigured, telegramMode as defaultTelegramMode } from './config.js';
 import { buildOpenAiTools, buildOpenApiDocument } from './openapi.js';
 import { leadMemorySchema, upsertLeadMemory } from './leadMemory.js';
 import { propertySearchSchema, searchProperties } from './propertySearch.js';
@@ -14,6 +14,7 @@ export function createApp({
   supabase = createSupabaseClient(),
   telegramBot = null,
   inbox = null,
+  telegramMode = defaultTelegramMode,
   telegramSecret = config.telegramWebhookSecret,
   enableToolRoutes = config.enableToolRoutes,
   admin = defaultAdmin(supabase)
@@ -48,6 +49,14 @@ export function createApp({
       // Which commit is running, so a deploy that did not pick up the latest code is easy to spot.
       commit: (process.env.RAILWAY_GIT_COMMIT_SHA ?? '').slice(0, 7) || undefined
     });
+  });
+
+  // For an outside monitor: is the bot able to do its job? Checks the database and that Telegram can still deliver to us.
+  // The answer is kept for 30 seconds so the page cannot be used to hammer the database or Telegram.
+  let ready = { at: 0, body: null, status: 200 };
+  app.get('/health/ready', async (_request, response) => {
+    if (Date.now() - ready.at > 30000) ready = { at: Date.now(), ...(await checkReady({ supabase, telegramBot, telegramMode })) };
+    response.status(ready.status).json(ready.body);
   });
 
   app.get('/openapi.json', (request, response) => {
@@ -108,6 +117,38 @@ export function createApp({
 
   return app;
 }
+
+async function checkReady({ supabase, telegramBot, telegramMode }) {
+  const body = { ok: true, database: 'skipped', webhook: 'skipped' };
+
+  if (supabase) {
+    try {
+      const { error } = await withTimeout(supabase.from(config.propertiesTable).select('property_id').limit(1));
+      body.database = error ? 'down' : 'ok';
+    } catch {
+      body.database = 'down';
+    }
+  }
+
+  // In webhook mode Telegram must know our address, and must not be failing to reach it.
+  if (telegramBot && telegramMode === 'webhook') {
+    try {
+      const info = await withTimeout(telegramBot.api.getWebhookInfo());
+      const recentError = info.last_error_date && Date.now() / 1000 - info.last_error_date < 15 * 60;
+      body.webhook = !info.url ? 'missing' : recentError ? 'erroring' : 'ok';
+      body.pendingUpdates = info.pending_update_count ?? 0;
+      if (body.webhook === 'erroring') body.lastError = String(info.last_error_message ?? '').slice(0, 120);
+    } catch {
+      body.webhook = 'unknown';
+    }
+  }
+
+  body.ok = body.database !== 'down' && !['missing', 'erroring', 'unknown'].includes(body.webhook);
+  return { body, status: body.ok ? 200 : 503 };
+}
+
+const withTimeout = (promise, ms = 8000) =>
+  Promise.race([promise, new Promise((_resolve, reject) => setTimeout(() => reject(new Error('timed out')), ms).unref())]);
 
 function defaultAdmin(supabase) {
   if (!supabase || !config.supabaseUrl || !config.supabaseAnonKey) return null;

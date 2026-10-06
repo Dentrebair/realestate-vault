@@ -173,3 +173,61 @@ test('behind the hosting proxy in production, the visitor\'s address is read fro
     config.nodeEnv = before;
   }
 });
+
+// ---- the outside monitor's check ---------------------------------------------------------------
+
+const readyApp = ({ supabase, info, mode = 'webhook' }) =>
+  createApp({
+    supabase,
+    telegramBot: { handleUpdate: async () => {}, api: { getWebhookInfo: async () => { if (info instanceof Error) throw info; return info; } } },
+    telegramSecret: SECRET,
+    telegramMode: mode,
+    enableToolRoutes: false,
+    admin: null
+  });
+const GOOD = { url: 'https://x.up.railway.app/telegram/webhook', pending_update_count: 0 };
+
+test('/health/ready is 200 when the database answers and Telegram can reach us', async () => {
+  const response = await request(readyApp({ supabase: createFakeSupabase({ properties }), info: GOOD })).get('/health/ready').expect(200);
+  assert.deepEqual(response.body, { ok: true, database: 'ok', webhook: 'ok', pendingUpdates: 0 });
+});
+
+test('/health/ready is 503 when the database is down', async () => {
+  const supabase = createFakeSupabase({ properties });
+  supabase.from = () => ({ select: () => ({ limit: () => Promise.resolve({ data: null, error: { message: 'connection lost' } }) }) });
+  const response = await request(readyApp({ supabase, info: GOOD })).get('/health/ready').expect(503);
+  assert.equal(response.body.database, 'down');
+  assert.equal(response.body.ok, false);
+});
+
+test('/health/ready is 503 when Telegram has no address for us, or is failing to deliver', async () => {
+  const supabase = createFakeSupabase({ properties });
+  assert.equal((await request(readyApp({ supabase, info: { url: '' } })).get('/health/ready').expect(503)).body.webhook, 'missing');
+
+  const failing = { ...GOOD, pending_update_count: 4, last_error_date: Math.floor(Date.now() / 1000) - 60, last_error_message: 'Wrong response from the webhook: 500' };
+  const body = (await request(readyApp({ supabase, info: failing })).get('/health/ready').expect(503)).body;
+  assert.equal(body.webhook, 'erroring');
+  assert.equal(body.pendingUpdates, 4);
+  assert.match(body.lastError, /500/);
+
+  assert.equal((await request(readyApp({ supabase, info: new Error('network') })).get('/health/ready').expect(503)).body.webhook, 'unknown');
+});
+
+test('an old webhook error is not held against the service, and polling mode skips the webhook check', async () => {
+  const supabase = createFakeSupabase({ properties });
+  const old = { ...GOOD, last_error_date: Math.floor(Date.now() / 1000) - 3600, last_error_message: 'old' };
+  await request(readyApp({ supabase, info: old })).get('/health/ready').expect(200);
+  const response = await request(readyApp({ supabase, info: new Error('would fail'), mode: 'polling' })).get('/health/ready').expect(200);
+  assert.equal(response.body.webhook, 'skipped');
+});
+
+test('the readiness answer is kept for 30 seconds, so the page cannot be used to hammer Telegram', async () => {
+  let calls = 0;
+  const app = createApp({
+    supabase: createFakeSupabase({ properties }),
+    telegramBot: { handleUpdate: async () => {}, api: { getWebhookInfo: async () => (calls++, GOOD) } },
+    telegramSecret: SECRET, telegramMode: 'webhook', enableToolRoutes: false, admin: null
+  });
+  for (let i = 0; i < 5; i++) await request(app).get('/health/ready').expect(200);
+  assert.equal(calls, 1);
+});

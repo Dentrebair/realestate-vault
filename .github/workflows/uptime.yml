@@ -1,0 +1,41 @@
+# Asks the live bot every 10 minutes whether it is working, from outside Railway.
+# If it is not, this run fails and GitHub emails you. It checks /health/ready: the database answers and Telegram can
+# still deliver messages to us. An older build without that page is checked on /health instead.
+#
+# To check a different address, set a repository variable HEALTH_BASE_URL (Settings, Secrets and variables, Variables).
+name: Uptime check
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ask the bot if it is working
+        env:
+          BASE_URL: ${{ vars.HEALTH_BASE_URL || 'https://telegram-production-78f1.up.railway.app' }}
+        run: |
+          fetch() { curl -sS --max-time 25 -o body.json -w '%{http_code}' "$BASE_URL$1" || echo 000; }
+          code=000
+          for attempt in 1 2 3; do
+            code=$(fetch /health/ready)
+            if [ "$code" = "404" ]; then
+              echo "::notice::/health/ready was not found, so this is an older build; checking /health instead"
+              code=$(fetch /health)
+            fi
+            [ "$code" = "200" ] && break
+            echo "attempt $attempt: HTTP $code"
+            sleep 30
+          done
+          cat body.json 2>/dev/null; echo
+          if [ "$code" != "200" ]; then
+            echo "::error::The bot is not healthy (HTTP $code)"
+            exit 1
+          fi
+          jq -e '.ok == true' body.json > /dev/null || { echo "::error::The service answered but reports a problem"; exit 1; }

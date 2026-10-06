@@ -161,3 +161,15 @@ test('a visit request whose alert failed is sent again, and not sent twice', asy
   assert.equal(await resendVisitAlerts({ supabase: stillPending, api: failing, chatId: 999, now }), 0);
   assert.equal(stillPending.tables.lead_events[0].alerted_at, null, 'stays pending and is tried again later');
 });
+
+test('behind the hosting proxy in production, the visitor\'s address is read from the forwarded header', async () => {
+  const { config } = await import('../src/config.js');
+  const before = config.nodeEnv;
+  config.nodeEnv = 'production';
+  try {
+    const app = createApp({ supabase: null, enableToolRoutes: false, admin: null });
+    assert.equal(app.get('trust proxy'), 1);
+  } finally {
+    config.nodeEnv = before;
+  }
+});

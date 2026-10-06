@@ -21,7 +21,10 @@ export function contextFacts() {
   return (
     `LISTING DATA (the full inventory):\n${JSON.stringify(listings)}\n` +
     `FIXED POLICY: we only sell property in Chennai; pricing, discounts, loans and legal questions are for the sales team or a professional; ` +
-    `site visits are requested with a button and the team confirms a time (${config.businessHours}); photos appear on a card with arrow buttons when a listing has them.`
+    `site visits are requested with a button and the team confirms a time (${config.businessHours}); photos appear on a card with arrow buttons when a listing has them. ` +
+    `HANDOFF: when a customer asks for a call back or to talk to someone, makes a price offer, or asks something about a listing or an area that the assistant cannot answer, ` +
+    `the system really does alert the team and keeps a request for them. So the assistant may truthfully say it has passed the request, offer or question to the team, ` +
+    `and that the team will reply here. Their replies reach the customer as "Message from our team".`
   );
 }
 

@@ -68,3 +68,11 @@ _Avoid_: FAQ entry, canned response
 **Consent**:
 A customer's agreement to the privacy notice, recorded with the date and the notice version. Without it the assistant keeps only their Telegram id.
 _Avoid_: Opt-in, terms acceptance
+
+**Request**:
+Something the assistant passes to the team: a site visit, a call back, a price offer, or a question it could not answer. It has a status (needs the team, waiting for the customer, resolved) and a thread of messages between the customer and the team. The team replies on Telegram or from the lead board.
+_Avoid_: Ticket, escalation, handoff (as a noun for the record)
+
+**Team**:
+The people who answer Requests. Today one Telegram account (the Sales desk chat). The assistant tells the customer a Request was "passed to our team" only when it really was.
+_Avoid_: Agents, staff chat

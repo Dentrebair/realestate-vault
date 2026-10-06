@@ -24,7 +24,8 @@ export async function eraseCustomer(supabase, customerId, { reason }) {
   const removed = {
     messages: await count('chat_messages'),
     events: await count('lead_events'),
-    knowledgeGaps: await count('knowledge_gaps').catch(() => 0)
+    knowledgeGaps: await count('knowledge_gaps').catch(() => 0),
+    requests: await count('handoffs').catch(() => 0)
   };
 
   // Gaps carry the customer's own words, and have no foreign key, so they are removed here.
@@ -44,6 +45,7 @@ export async function eraseCustomer(supabase, customerId, { reason }) {
 // A plain list of what we hold about this customer, for /mydata.
 export async function describeCustomerData(supabase, lead) {
   const { count: messages } = await supabase.from('chat_messages').select('*', { count: 'exact', head: true }).eq('customer_id', lead.customerId);
+  const { count: requests } = await supabase.from('handoffs').select('*', { count: 'exact', head: true }).eq('customer_id', lead.customerId);
 
   const titles = [];
   for (const id of lead.shortlistedPropertyIds ?? []) {
@@ -65,6 +67,7 @@ export async function describeCustomerData(supabase, lead) {
     ].filter(Boolean).join(', ') || 'nothing yet'}`,
     `Shortlisted: ${titles.length ? titles.join('; ') : 'nothing'}`,
     `Messages we hold: ${messages ?? 0}`,
+    `Requests passed to our team: ${requests ?? 0}`,
     `Agreed to the privacy notice: ${lead.consentAt ? lead.consentAt.slice(0, 10) : 'not yet'}`
   ];
   return lines.join('\n');
@@ -77,6 +80,11 @@ export async function runRetention(supabase, { chatHours, leadHours, now = Date.
 
   const { data: oldMessages, error: messagesError } = await supabase.from('chat_messages').delete().lt('created_at', chatCutoff).select('id');
   if (messagesError) throw messagesError;
+
+  // Requests passed to the team hold the customer's words too, so they follow the same clock as the conversation.
+  // A missing table (before sql/007) is not an error here.
+  const { data: oldRequests, error: requestsError } = await supabase.from('handoffs').delete().lt('updated_at', chatCutoff).select('id');
+  if (requestsError && !/handoffs|schema cache|does not exist/i.test(requestsError.message)) throw requestsError;
 
   const { data: stale, error: staleError } = await supabase
     .from('customer_leads')
@@ -91,7 +99,7 @@ export async function runRetention(supabase, { chatHours, leadHours, now = Date.
     await eraseCustomer(supabase, id, { reason: 'retention' });
     leads += 1;
   }
-  return { messages: oldMessages.length, leads };
+  return { messages: oldMessages.length, requests: oldRequests?.length ?? 0, leads };
 }
 
 export function startRetention(supabase, config, log = console.log) {

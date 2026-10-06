@@ -1426,3 +1426,106 @@ test('a reply to a request already marked resolved reaches the customer and reop
   await h.send(say('yes works'));
   assert.match(h.toSales().at(-1).text, /yes works/);
 });
+
+test('a refusal about loans, taxes or brochures is not passed to the team; a missing listing detail is', async () => {
+  const policy = harness({ route: null });
+  await seedLead(policy, {}, 'interested');
+  await setBotState(policy.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+  await policy.send(say('can you help with a home loan'));
+  assert.equal(policy.rows('handoffs').length, 0);
+  assert.doesNotMatch(policy.toUser()[0].text, /passed your question to our team/);
+
+  const detail = harness({ route: null });
+  await seedLead(detail, {}, 'interested');
+  await setBotState(detail.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+  await detail.send(say('Does the building have a rooftop garden?'));
+  assert.equal(detail.rows('handoffs').length, 1);
+});
+
+// ---- audit fixes ----------------------------------------------------------------------------
+
+test('a search saves what was asked for, so the board has it even if the model never calls save_requirements', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ location: 'Anna Nagar', category: 'residential', bedrooms: 3, maxBudget: { amount: 5, unit: 'crore' } }, toolCall);
+      return { text: 'Here you go.' };
+    }
+  });
+  await h.send(say('3BHK in Anna Nagar under 5 crore'));
+
+  const lead = await getLead(h.supabase, ID);
+  assert.deepEqual(lead.preferredLocations, ['Anna Nagar']);
+  assert.deepEqual(lead.propertyCategories, ['residential']);
+  assert.equal(lead.bedrooms, 3);
+  assert.equal(lead.budgetMax, 50000000);
+  assert.match(lead.lastQuerySummary, /3 bedroom/);
+  assert.equal(lead.leadStage, 'interested');
+});
+
+test('a later search adds an area and keeps the earlier one; a clashing budget does not overwrite the saved one', async () => {
+  const h = harness({
+    generate: async ({ tools }) => {
+      await tools.search_properties.execute({ location: 'OMR', category: 'residential', minBudget: { amount: 2, unit: 'crore' }, maxBudget: { amount: 3, unit: 'crore' } }, toolCall);
+      return { text: 'ok' };
+    }
+  });
+  await seedLead(h, { preferredLocations: ['Anna Nagar'], budgetMax: 5000000, budgetMin: 4000000 });
+  await h.send(say('something in OMR between 2 and 3 crore'));
+
+  const lead = await getLead(h.supabase, ID);
+  assert.deepEqual(lead.preferredLocations.sort(), ['Anna Nagar', 'OMR']);
+  assert.equal(lead.budgetMax, 5000000, 'the clashing budget is left alone');
+});
+
+test('naming a listing that has "Rental" in its title is not a rental request', async () => {
+  const rows = structuredClone(properties);
+  rows.find((p) => p.property_id === 'p18').title = '3-Storey Multi-Family Rental House';
+  const named = harness({ tables: { properties: rows }, route: null, generate: async () => ({ text: 'Model handled it.' }) });
+  await seedLead(named, {}, 'interested');
+  await setBotState(named.supabase, ID, { scope: 'on_topic' });
+  await named.send(say('tell me about the 3-Storey Multi-Family Rental House'));
+  assert.doesNotMatch(named.toUser()[0].text, /We only sell properties/);
+
+  const plain = harness({ route: null });
+  await seedLead(plain, {}, 'interested');
+  await setBotState(plain.supabase, ID, { scope: 'on_topic' });
+  await plain.send(say('show me rental houses'));
+  assert.match(plain.toUser()[0].text, /We only sell properties/);
+});
+
+test('/mydata lists each fact once and counts the requests passed to the team', async () => {
+  const h = harness();
+  await seedLead(h, { bedrooms: 2, preferredLocations: ['OMR'] }, 'interested');
+  await h.send(say('/mydata'));
+  const text = h.toUser().at(-1).text;
+  assert.equal((text.match(/2 bedrooms/g) ?? []).length, 1);
+  assert.match(text, /Requests passed to our team: 0/);
+});
+
+test('retention removes old requests and their threads with the conversation', async () => {
+  const { runRetention } = await import('../src/privacy.js');
+  const db = createFakeSupabase({
+    customer_leads: [{ customer_id: 'telegram:1', is_test: false, last_contacted_at: new Date().toISOString() }],
+    handoffs: [
+      { id: 1, customer_id: 'telegram:1', kind: 'offer', status: 'resolved', summary: 'old', updated_at: '2020-01-01T00:00:00.000Z' },
+      { id: 2, customer_id: 'telegram:1', kind: 'offer', status: 'open', summary: 'new', updated_at: new Date().toISOString() }
+    ],
+    handoff_messages: [{ id: 1, handoff_id: 1, direction: 'customer', via: 'bot', text: 'old words' }, { id: 2, handoff_id: 2, direction: 'customer', via: 'bot', text: 'new words' }]
+  });
+  const done = await runRetention(db, { chatHours: 24, leadHours: 24 * 365 });
+  assert.equal(done.requests, 1);
+  assert.deepEqual(db.tables.handoffs.map((h) => h.id), [2]);
+});
+
+test('if the lookup for a team reply fails, the team is told and the words are not treated as a customer message', async () => {
+  const h = harness({ generate: async () => ({ text: 'Customer-style reply.' }) });
+  await requestVisit(h);
+  const alertId = alertMessageId(h);
+  const real = h.supabase.from;
+  h.supabase.from = (name) => (name === 'handoffs' ? { select: () => ({ eq: () => ({ eq: () => ({ limit: () => Promise.resolve({ data: null, error: { code: '57P01', message: 'connection lost' } }) }) }) }) } : real(name));
+
+  await h.send(fromTeam('Saturday works', alertId));
+
+  assert.match(h.toSales().at(-1).text, /could not look up which request/);
+  assert.ok(!h.toSales().some((m) => /Customer-style reply/.test(m.text)));
+});

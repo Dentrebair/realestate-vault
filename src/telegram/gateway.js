@@ -96,7 +96,11 @@ export async function answerFromData({ text, lead, supabase, config: given = app
 
   // ---- we only sell: no search, no cards ----
   // Either the model or the keyword rule is enough: the rule has no false alarms on record, and it catches "PG near ...".
-  if (wantsRental(t) || (route && route.label === 'rental')) return { reply: ONLY_SALES };
+  if (wantsRental(t) || (route && route.label === 'rental')) {
+    // A listing can have "Rental" in its name ("Multi-Family Rental House"). Naming it is not asking to rent.
+    const named = await findByName(supabase, t, config.propertiesTable).catch(() => null);
+    if (!named) return { reply: ONLY_SALES };
+  }
 
   // ---- an offer on a property in play ("can i get for 54L"): not a search, and not a price we can agree ----
   const offer = intent ? intent.offer : isPriceOffer(t, shown) ? offeredAmount(t) : null;
@@ -296,8 +300,9 @@ async function gapReply({ supabase, lead, text, topic, shown, property = null, a
   return {
     reply,
     gapId,
-    // The team is told as well, and the customer is told that they have been.
-    handoff: {
+    // The team is told as well, and the customer is told that they have been. Not for a refusal ("we cannot advise
+    // on loans"): telling the customer to ask a bank and also passing it on would contradict itself.
+    handoff: topic.kind === 'policy' ? null : {
       kind: 'question',
       summary: text.slice(0, 300),
       property: property ? { id: property.property_id, title: property.title, priceDisplay: priceDisplay(property.price_inr) } : null,

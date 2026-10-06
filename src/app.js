@@ -19,6 +19,9 @@ export function createApp({
   admin = defaultAdmin(supabase)
 } = {}) {
   const app = express();
+  // Behind Railway's proxy every request would otherwise appear to come from the proxy, so the sign-in limiter would lock
+  // everyone out together. One hop is trusted.
+  if (config.nodeEnv === 'production') app.set('trust proxy', 1);
 
   // Photos are served from Supabase Storage, so the board page may load images from there.
   const imageHosts = config.supabaseUrl ? [new URL(config.supabaseUrl).origin] : [];

@@ -286,6 +286,35 @@ Decisions (owner, 2026-10-03): the team is one person for now (the Sales desk ch
 
 ---
 
+## Audit, 2026-10-06
+
+A review of everything built, against the live database and the real model.
+
+**Fixed**
+- A listing named "Multi-Family Rental House" made the bot answer "we only sell" to a customer asking about it. Naming a listing is no longer a rental request.
+- A search did not save what the customer asked for unless the model remembered to call the save tool, so the board showed empty profiles and "initiated" for people who had searched. Area, kind, size, budget and a one-line summary are now saved by code.
+- `/mydata` printed the bedrooms twice, and did not mention requests.
+- Retention did not cover request threads, which hold the customer's words. They now follow the conversation's clock and are counted in `/forget`.
+- Behind Railway's proxy every visitor looked like the same address, so the sign-in limiter could lock out the admin for everyone. One proxy hop is now trusted in production.
+- A failed lookup of which request a team reply belongs to made the reply fall through as a customer message. The team is now told it did not work.
+- Refusals about loans, tax, brochures and videos no longer also raise a team request ("ask a bank" and "passed to our team" contradicted each other).
+- The grounding audit did not know about the handoff, so it flagged "passed to our team" as invented (9 of 41). It does now (38 of 41).
+- A repeat Book Site Visit tap said "already asked" even when the team had never been alerted. It now alerts them.
+
+**Open**
+- A customer's two quick messages can overwrite each other's profile changes once there is more than one copy of the bot. Keep one copy.
+- A model outage sends the team one failure alert per failed message. Throttle it.
+- Every unanswered question alerts the team at once. A curious customer can produce many pings; consider batching or a per-customer limit.
+- No automated test run on push (no CI), and Railway does not deploy from GitHub by itself.
+- Nothing watches the service from outside; add an uptime check on `/health`.
+- The board reads at most 1000 leads and search reads at most 1000 listings, silently.
+- "Book a site visit for the first one" after a search with no results repeats the no-match message instead of asking which property.
+- Inventory data: only 3 of 20 listings have photos; two residential listings have no bedroom count (the heritage bungalow and the multi-family house).
+- The owner's own account is flagged as a test lead, so its data is exempt from retention and its alerts say [TEST]. Real customers are unaffected.
+- Not done, by decision: `sql/005_privacy.sql`, `BUSINESS_NAME`, `PRIVACY_CONTACT`, the legal review.
+
+---
+
 ## Test leads
 
 [test/fixtures/testLeads.js](../test/fixtures/testLeads.js) holds 50 leads written against the live inventory. Each has a saved profile, the messages that person would type, and what a good reply looks like.
@@ -361,3 +390,4 @@ Commands (after P0):
 | 2026-10-02 | Model-decided routing: negotiation judge and a message router, rental and "anything else" handling, reply before cards, `/reset` returns a lead to initiated. |
 | 2026-10-03 | Reliability sprint: durable updates, recovery, graceful deploys, retried visit alerts, Telegram 429 retry. Scaling notes added. Privacy and legal work deferred to the end by the owner. |
 | 2026-10-03 | Human handoff: requests on the board and Telegram alerts the team can reply to; the thread is shared between Telegram and the board. |
+| 2026-10-06 | Audit of the whole build; nine fixes and an open list (see the Audit section). |

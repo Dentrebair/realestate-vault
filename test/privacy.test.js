@@ -246,13 +246,13 @@ test('retention deletes old messages and idle real leads, and never touches test
   assert.equal(done.messages, 2);
 
   // Nothing more to do on a second run.
-  assert.deepEqual(await runRetention(db, { chatHours: 24, leadHours: 24 }), { messages: 0, leads: 0 });
+  assert.deepEqual(await runRetention(db, { chatHours: 24, leadHours: 24 }), { messages: 0, requests: 0, leads: 0 });
 });
 
 test('erasing a customer that does not exist is harmless', async () => {
   const db = createFakeSupabase();
   const removed = await eraseCustomer(db, 'telegram:ghost', { reason: 'customer_request' });
-  assert.deepEqual(removed, { messages: 0, events: 0, knowledgeGaps: 0 });
+  assert.deepEqual(removed, { messages: 0, events: 0, knowledgeGaps: 0, requests: 0 });
 });
 
 test('log lines never carry what a customer typed', async () => {

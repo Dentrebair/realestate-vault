@@ -346,6 +346,24 @@ export function mentionUnavailable(reply, unavailable = []) {
   return `${reply.trim()} Note: ${first.title} is ${state}.`;
 }
 
+// The profile gets what the customer just asked for: area, kind of property, size, budget and a one-line summary.
+// Lists grow (an area asked about earlier stays); a budget that clashes with the saved one is left for the model to sort out.
+async function rememberSearch({ supabase, lead, criteria: c }) {
+  const patch = { customerId: lead.customerId, lastQuerySummary: c.summary };
+  if (c.area && c.areaRecognised) patch.preferredLocations = [...new Set([...(lead.preferredLocations ?? []), c.area])].slice(-20);
+  if (c.categories?.length) patch.propertyCategories = [...new Set([...(lead.propertyCategories ?? []), ...c.categories])].slice(-20);
+  if (c.bedrooms) patch.bedrooms = c.bedrooms;
+
+  const min = c.minBudget || undefined;
+  const max = c.maxBudget || undefined;
+  const clash = (max && lead.budgetMin && lead.budgetMin > max) || (min && lead.budgetMax && lead.budgetMax < min);
+  if (!clash) {
+    if (min) patch.budgetMin = min;
+    if (max) patch.budgetMax = max;
+  }
+  await upsertLeadMemory(supabase, patch, { actor: 'system' });
+}
+
 // ---- search tool ---------------------------------------------------------------------------
 
 async function searchTool({ input, supabase, api, chatId, lead, state }) {
@@ -381,6 +399,9 @@ async function searchTool({ input, supabase, api, chatId, lead, state }) {
 
   const result = await searchProperties(supabase, filters);
   if (!result.configured) return { error: result.message };
+
+  // What was asked for is saved by code, so the board has it even when the model forgets to call save_requirements.
+  await rememberSearch({ supabase, lead, criteria: result.criteria }).catch((error) => console.error('Could not save the search:', error.message));
 
   // The cards are held back and sent after the reply text, so the customer reads the text first.
   const { views, send } = await prepareSearchResult({ api, supabase, chatId, result, lead });

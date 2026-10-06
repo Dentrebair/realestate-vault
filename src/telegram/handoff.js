@@ -134,7 +134,15 @@ export async function staffReply(ctx, deps) {
   const replied = ctx.message?.reply_to_message;
   if (!replied || !staffIds(config).includes(ctx.from?.id)) return false;
 
-  const handoff = await findByStaffMessage(supabase, ctx.chat.id, replied.message_id).catch(() => null);
+  let handoff;
+  try {
+    handoff = await findByStaffMessage(supabase, ctx.chat.id, replied.message_id);
+  } catch (error) {
+    // Do not let the team's words fall through as a customer message; say it did not work.
+    log('staff_reply_lookup_failed', { error: error.message }, 'error');
+    await ctx.reply('⚠️ I could not look up which request that reply belongs to, so nothing was sent. Please try again in a minute.');
+    return true;
+  }
   if (!handoff) return false;
 
   const result = await replyToCustomer({ deps, handoff, text: ctx.message.text, by: `telegram:${ctx.from.id}`, via: 'telegram' });

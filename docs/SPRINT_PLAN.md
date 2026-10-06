@@ -305,14 +305,15 @@ A review of everything built, against the live database and the real model.
 - The grounding audit did not know about the handoff, so it flagged "passed to our team" as invented (9 of 41). It does now (38 of 41).
 - A repeat Book Site Visit tap said "already asked" even when the team had never been alerted. It now alerts them.
 
+**Also fixed since:** asking to book a visit with nothing on screen now asks which property (or says there is nothing to book yet after a search with no results). "Site visit" no longer reads as a search for a plot of land.
+
 **Open**
 - A customer's two quick messages can overwrite each other's profile changes once there is more than one copy of the bot. Keep one copy.
 - A model outage sends the team one failure alert per failed message. Throttle it.
 - Every unanswered question alerts the team at once. A curious customer can produce many pings; consider batching or a per-customer limit.
-- No automated test run on push (no CI), and Railway does not deploy from GitHub by itself.
-- Nothing watches the service from outside; add an uptime check on `/health`.
+- ~~No automated test run on push~~ Done: a GitHub Action runs the tests on every push to `telegram` and on pull requests (277 tests, about a minute). Railway now deploys from GitHub on its own; to make it wait for the tests, turn on **Wait for CI** in the Railway service settings.
+- **Uptime monitoring: prepared, switched off until a client rollout.** `/health/ready` checks the database and that Telegram can still reach us, and `.github/workflows/uptime.yml` checks it every 10 minutes. GitHub runs scheduled checks only from the default branch, which is `main`, so the file does nothing while it sits on `telegram`. At rollout, pick one: copy the file to `main`; make `telegram` the default branch; or point a free outside monitor (UptimeRobot, Better Stack) at `/health/ready`.
 - The board reads at most 1000 leads and search reads at most 1000 listings, silently.
-- "Book a site visit for the first one" after a search with no results repeats the no-match message instead of asking which property.
 - Inventory data: only 3 of 20 listings have photos; two residential listings have no bedroom count (the heritage bungalow and the multi-family house).
 - The owner's own account is flagged as a test lead, so its data is exempt from retention and its alerts say [TEST]. Real customers are unaffected.
 - Not done, by decision: `sql/005_privacy.sql`, `BUSINESS_NAME`, `PRIVACY_CONTACT`, the legal review.
@@ -396,3 +397,4 @@ Commands (after P0):
 | 2026-10-03 | Human handoff: requests on the board and Telegram alerts the team can reply to; the thread is shared between Telegram and the board. |
 | 2026-10-06 | Audit of the whole build; nine fixes and an open list (see the Audit section). |
 | 2026-10-06 | Reply timers: wait time on the board, red when overdue (30 min visit, 2 hr other), reminders in business hours, one customer notice after 24 hours. |
+| 2026-10-06 | Tests run on every push (GitHub Action); readiness page `/health/ready`; uptime check prepared and deferred to client rollout; visit request with nothing on screen asks which property. |

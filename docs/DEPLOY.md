@@ -61,6 +61,12 @@ are turned on without a token).
 3. `https://<your-domain>/admin/`: sign in, find the lead, move its stage, open **Listings** and **Knowledge**.
 4. Tap **Book Site Visit** and confirm the alert reaches the Sales desk chat.
 
+## Checks that run by themselves
+
+- **Tests.** A GitHub Action runs `npm test` on every push to `telegram` (Actions tab on GitHub). In Railway, **Settings, Deploy, Wait for CI** makes a deploy wait for it, so a change that fails its tests is not deployed.
+- **Readiness.** `https://<your-domain>/health/ready` answers 200 only if the database responds and Telegram can deliver to the webhook (503 otherwise, with which part is failing). Use it for any outside monitor.
+- **Uptime check (not switched on yet).** `.github/workflows/uptime.yml` calls the readiness page every 10 minutes and fails, so GitHub emails you, if the bot is down. GitHub runs scheduled checks only from the default branch, so it needs one of: the file copied to `main`; `telegram` made the default branch; or a free outside monitor (UptimeRobot, Better Stack) pointed at `/health/ready` instead. Do this when a client goes live.
+
 ## If something is wrong
 
 - **The bot does not answer.** Check the logs for errors. Ask Telegram what it knows: open

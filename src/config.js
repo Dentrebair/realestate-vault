@@ -35,6 +35,16 @@ const configSchema = z.object({
   // Telegram accounts whose replies to an alert are passed to the customer. Defaults to the Sales desk chat when that is a person.
   staffTelegramIds: z.array(z.number().int()).default([]),
   businessHours: z.string().min(1).default('Mon to Sat, 10am to 7pm IST'),
+  // The same hours in a form code can check, for reminders: days are 0 (Sunday) to 6, hours are 0 to 24 in the time zone.
+  businessDays: z.array(z.number().int().min(0).max(6)).default([1, 2, 3, 4, 5, 6]),
+  businessOpenHour: z.coerce.number().int().min(0).max(23).default(10),
+  businessCloseHour: z.coerce.number().int().min(1).max(24).default(19),
+  businessTimeZone: z.string().min(1).default('Asia/Kolkata'),
+  // How long a customer may wait for the team before the request turns red and the team is reminded.
+  visitReplyMinutes: z.coerce.number().int().positive().default(30),
+  requestReplyMinutes: z.coerce.number().int().positive().default(120),
+  // After this many hours without a reply the customer is told, once, that the team has not replied yet.
+  holdingNoticeHours: z.coerce.number().positive().default(24),
   // Privacy. The notice names the business and says how to reach it; retention is how long data is kept.
   businessName: z.string().min(1).default('our property team'),
   privacyContact: z.string().min(1).optional(),
@@ -85,6 +95,13 @@ const parsed = configSchema.safeParse({
     .filter(Boolean)
     .map(Number),
   businessHours: blank(process.env.BUSINESS_HOURS),
+  businessDays: blank(process.env.BUSINESS_DAYS)?.split(',').map((d) => Number(d.trim())).filter((d) => !Number.isNaN(d)),
+  businessOpenHour: blank(process.env.BUSINESS_OPEN_HOUR),
+  businessCloseHour: blank(process.env.BUSINESS_CLOSE_HOUR),
+  businessTimeZone: blank(process.env.BUSINESS_TIMEZONE),
+  visitReplyMinutes: blank(process.env.VISIT_REPLY_MINUTES),
+  requestReplyMinutes: blank(process.env.REQUEST_REPLY_MINUTES),
+  holdingNoticeHours: blank(process.env.HOLDING_NOTICE_HOURS),
   teamConfirmLine: blank(process.env.TEAM_CONFIRM_LINE),
   businessName: blank(process.env.BUSINESS_NAME),
   privacyContact: blank(process.env.PRIVACY_CONTACT),

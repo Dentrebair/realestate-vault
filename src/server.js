@@ -5,6 +5,7 @@ import { createSupabaseClient } from './supabase.js';
 import { ALLOWED_UPDATES, COMMANDS, createBot } from './telegram/bot.js';
 import { createInbox } from './telegram/inbox.js';
 import { startAlertRetry } from './telegram/sales.js';
+import { startReminders } from './telegram/reminders.js';
 import { drain, startRecovery } from './telegram/webhook.js';
 
 function refuse(message) {
@@ -49,6 +50,7 @@ const server = app.listen(config.port, () => {
 if (bot) {
   if (inbox) startRecovery(bot, inbox);
   startAlertRetry({ supabase, api: bot.api, chatId: config.salesDeskChatId });
+  startReminders({ supabase, api: bot.api, config });
   await bot.init();
   await bot.api.setMyCommands(COMMANDS);
 

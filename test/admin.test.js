@@ -667,3 +667,27 @@ test('without Telegram connected, a board reply is refused rather than lost', as
   const agent = await signIn(app);
   await agent.post('/admin/api/handoffs/1/reply').send({ text: 'hello' }).expect(503);
 });
+
+test('the list says since when each customer has waited, and which requests are overdue', async () => {
+  const { app, supabase } = withRequests();
+  // Request 1 has a team reply at 10:05 and no customer message after it: nobody is owed an answer. Request 2 has waited since 11:00.
+  const agent = await signIn(app);
+  const body = (await agent.get('/admin/api/handoffs').expect(200)).body;
+
+  const byId = Object.fromEntries(body.requests.map((r) => [r.id, r]));
+  assert.equal(byId[1].waitingSince, null, 'the team has replied');
+  assert.equal(byId[1].overdue, false);
+  assert.equal(byId[3].overdue, false, 'resolved');
+
+  supabase.tables.handoff_messages.push({ id: 9, handoff_id: 2, direction: 'customer', via: 'bot', text: 'Is there a rooftop garden?', created_at: '2026-10-01T11:00:00Z' });
+  const again = (await agent.get('/admin/api/handoffs').expect(200)).body;
+  const two = again.requests.find((r) => r.id === 2);
+  assert.equal(two.waitingSince, '2026-10-01T11:00:00Z');
+  assert.equal(two.replyMinutes, 120, 'a question gets two hours');
+  assert.equal(two.overdue, true);
+  assert.equal(again.overdue, 1);
+  assert.ok(Date.parse(again.serverTime) > Date.parse('2026-10-01'), 'the server time is sent so the page counts from it');
+
+  supabase.tables.handoffs.find((h) => h.id === 2).kind = 'visit';
+  assert.equal((await agent.get('/admin/api/handoffs').expect(200)).body.requests.find((r) => r.id === 2).replyMinutes, 30, 'a visit gets thirty minutes');
+});

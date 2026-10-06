@@ -27,6 +27,29 @@ function failed(error, what) {
 
 const now = () => new Date().toISOString();
 
+// How long the team may take before a request is overdue: a visit is the hottest lead, so it gets the shortest time.
+export const replyMinutes = (kind, config) => (kind === 'visit' ? config.visitReplyMinutes : config.requestReplyMinutes);
+
+// Since when has the team owed the customer an answer? From the first customer message after the team's last reply
+// (or the first message of the request). It restarts when the customer answers a reply from the team.
+export function waitingSince(thread) {
+  let lastReply = -Infinity;
+  for (const m of thread) if (m.direction === 'staff') lastReply = Math.max(lastReply, Date.parse(m.createdAt));
+  return thread.find((m) => m.direction === 'customer' && Date.parse(m.createdAt) > lastReply)?.createdAt ?? null;
+}
+
+// "2 hrs 21 mins", "45 mins", "1 hr", "less than a min".
+export function formatWait(minutes) {
+  const total = Math.max(0, Math.floor(minutes));
+  if (total < 1) return 'less than a min';
+  const hours = Math.floor(total / 60);
+  const mins = total % 60;
+  const parts = [];
+  if (hours) parts.push(`${hours} ${hours === 1 ? 'hr' : 'hrs'}`);
+  if (mins) parts.push(`${mins} ${mins === 1 ? 'min' : 'mins'}`);
+  return parts.join(' ');
+}
+
 export function toHandoff(row) {
   return {
     id: row.id,
@@ -152,9 +175,11 @@ export async function setStatus(supabase, id, status, by = null) {
   return data?.length ? toHandoff(data[0]) : null;
 }
 
-export async function listHandoffs(supabase, { status = null, limit = 100 } = {}) {
+// `needsTeam` lists only the requests the team owes an answer to. `withWaiting` adds, for those, since when.
+export async function listHandoffs(supabase, { status = null, limit = 100, needsTeam = false, withWaiting = false } = {}) {
   let query = supabase.from('handoffs').select('*');
-  if (status === 'open') query = query.in('status', OPEN);
+  if (needsTeam) query = query.eq('status', 'open');
+  else if (status === 'open') query = query.in('status', OPEN);
   else if (status) query = query.eq('status', status);
   const { data, error } = await query.order('created_at', { ascending: false }).limit(limit);
   if (error) return failed(error, 'list requests') ?? [];
@@ -165,9 +190,24 @@ export async function listHandoffs(supabase, { status = null, limit = 100 } = {}
     const { data: leads } = await supabase.from('customer_leads').select('customer_id,display_name,handle,is_test').in('customer_id', ids);
     for (const lead of leads ?? []) names.set(lead.customer_id, lead);
   }
+  const waiting = new Map();
+  if (withWaiting) {
+    const open = data.filter((row) => row.status === 'open').map((row) => row.id);
+    if (open.length) {
+      const { data: messages } = await supabase.from('handoff_messages').select('handoff_id,direction,created_at').in('handoff_id', open).order('created_at', { ascending: true });
+      const byRequest = new Map();
+      for (const m of messages ?? []) (byRequest.get(m.handoff_id) ?? byRequest.set(m.handoff_id, []).get(m.handoff_id)).push({ direction: m.direction, createdAt: m.created_at });
+      for (const [id, thread] of byRequest) waiting.set(id, waitingSince(thread));
+    }
+  }
   return data.map((row) => {
     const lead = names.get(row.customer_id);
-    return { ...toHandoff(row), customerName: lead?.display_name ?? 'Unknown', customerHandle: lead?.handle ?? null };
+    return {
+      ...toHandoff(row),
+      customerName: lead?.display_name ?? 'Unknown',
+      customerHandle: lead?.handle ?? null,
+      waitingSince: waiting.get(row.id) ?? null
+    };
   });
 }
 

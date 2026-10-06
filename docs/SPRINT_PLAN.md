@@ -281,7 +281,11 @@ Decisions (owner, 2026-10-03): the team is one person for now (the Sales desk ch
 - [x] **Safeguards.** Only listed team accounts (`STAFF_TELEGRAM_IDS`, or the Sales desk chat when it is a person) can reply through an alert. Opening a thread is written to the access log. Requests and threads belong to the customer and are deleted with them (`/forget`, retention). Replies to test leads are saved but never sent. Viewers cannot see the tab.
 - [x] **The assistant knows what the team said.** The team's message is saved in the customer's conversation (as "Message from our team: …"), so a later "yes, Saturday works" has a meaning, and the assistant may repeat an amount or a time the team gave. A short reply to the team (12 words or fewer, no question, no search, no offer) gets a fixed "Thanks, I have passed that to our team. They will confirm here." and goes to the team; anything else is handled normally.
 - [x] The customer is only told "I have passed this to our team" when the team really was told (a request was saved or the alert was sent).
-- [ ] **You:** run `sql/007_handoffs.sql`, optionally set `STAFF_TELEGRAM_IDS`, redeploy.
+- [x] **Replies are not left to chance.** Every request the team owes an answer to shows **Customer wait time since - 2 hrs 21 mins** on the board, counting up live. It runs from the customer's first message the team has not answered, stops when the team replies, and restarts when the customer answers that reply. A request turns **red** after 30 minutes for a site visit and 2 hours for anything else (`VISIT_REPLY_MINUTES`, `REQUEST_REPLY_MINUTES`); overdue requests sort first and the header says "5 open, 3 overdue".
+- [x] **Reminders.** At that point the bot sends the team "⏰ Customer waiting 41 mins" under the original alert, and again after 24 hours. Only inside business hours (Mon to Sat, 10am to 7pm India time, `BUSINESS_*` settings), so nothing buzzes at night; a request that went overdue overnight is reminded at opening time. Once per wait.
+- [x] **The customer is told, once, after 24 hours** without a reply: "Our team has not replied yet. They are available Mon to Sat, 10am to 7pm IST. Your request is still open." No time is promised. Test leads get no message.
+- Not done: closing a request automatically after a few days, a second person to escalate to.
+- [ ] **You:** run `sql/007_handoffs.sql` (done), optionally set `STAFF_TELEGRAM_IDS`, redeploy.
 - Not done: more than one team member answering with their own names (the thread shows the Telegram id), assigning a request to a person, a reminder when a request has waited too long, saving a team answer as an approved answer in one click, and a group chat for the team.
 
 ---
@@ -391,3 +395,4 @@ Commands (after P0):
 | 2026-10-03 | Reliability sprint: durable updates, recovery, graceful deploys, retried visit alerts, Telegram 429 retry. Scaling notes added. Privacy and legal work deferred to the end by the owner. |
 | 2026-10-03 | Human handoff: requests on the board and Telegram alerts the team can reply to; the thread is shared between Telegram and the board. |
 | 2026-10-06 | Audit of the whole build; nine fixes and an open list (see the Audit section). |
+| 2026-10-06 | Reply timers: wait time on the board, red when overdue (30 min visit, 2 hr other), reminders in business hours, one customer notice after 24 hours. |

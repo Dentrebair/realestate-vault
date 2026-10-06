@@ -1,6 +1,6 @@
 // The Requests tab: what the bot passed to the team, the conversation about each, and replying from the board.
 import { config as appConfig } from '../config.js';
-import { OPEN, countOpen, getHandoff, getThread, listHandoffs, setStatus } from '../handoff.js';
+import { OPEN, countOpen, getHandoff, getThread, listHandoffs, replyMinutes, setStatus, waitingSince } from '../handoff.js';
 import { replyToCustomer } from '../telegram/handoff.js';
 import { recordAccess } from './audit.js';
 
@@ -18,12 +18,21 @@ export function mountHandoffRoutes(router, { supabase, requireStaff, requireJson
   router.get('/api/handoffs', requireStaff('admin'), async (request, response, next) => {
     try {
       const status = ['open', 'resolved'].includes(request.query.status) ? request.query.status : null;
-      const all = await listHandoffs(supabase, { status });
+      const all = await listHandoffs(supabase, { status, withWaiting: true });
       const requests = request.query.tests === '0' ? all.filter((h) => !h.isTest) : all;
       const titles = await titlesFor(requests.map((h) => h.propertyId));
+      const nowMs = Date.now();
+      const decorated = requests.map((h) => {
+        const allowed = replyMinutes(h.kind, appConfig);
+        const overdue = h.status === 'open' && h.waitingSince !== null && (nowMs - Date.parse(h.waitingSince)) / 60000 >= allowed;
+        return { ...h, propertyTitle: titles.get(h.propertyId)?.title ?? null, replyMinutes: allowed, overdue };
+      });
       response.json({
-        requests: requests.map((h) => ({ ...h, propertyTitle: titles.get(h.propertyId)?.title ?? null })),
-        open: await countOpen(supabase)
+        requests: decorated,
+        open: await countOpen(supabase),
+        overdue: decorated.filter((h) => h.overdue).length,
+        // The page counts the wait up from this, so a wrong clock on the viewer's computer does not change it.
+        serverTime: new Date(nowMs).toISOString()
       });
     } catch (error) {
       next(error);
@@ -38,7 +47,7 @@ export function mountHandoffRoutes(router, { supabase, requireStaff, requireJson
       // The thread is what the customer wrote, so opening it is logged like opening a conversation.
       await recordAccess(supabase, { staffEmail: request.staff.email, customerId: handoff.customerId, conversation: true })
         .catch((error) => console.error('Could not write the access log:', error.message));
-      response.json({ request: handoff, thread });
+      response.json({ request: handoff, thread, waitingSince: handoff.status === 'open' ? waitingSince(thread) : null });
     } catch (error) {
       next(error);
     }

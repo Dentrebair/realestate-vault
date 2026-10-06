@@ -7,7 +7,7 @@
   };
   const REFRESH_MS = 5000;
 
-  const state = { me: null, showTests: true, openId: null, openListing: null, timer: null, view: 'leads', listings: [] };
+  const state = { me: null, showTests: true, openId: null, openListing: null, timer: null, view: 'leads', listings: [], clockOffset: 0 };
   const $ = (id) => document.getElementById(id);
 
   function el(tag, attrs = {}, ...children) {
@@ -107,6 +107,8 @@
     setView(state.view);
     refreshGapCount();
     refreshRequestCount();
+    clearInterval(state.ticker);
+    state.ticker = setInterval(tickWaits, 10000);
     clearInterval(state.timer);
     state.timer = setInterval(() => {
       if (document.hidden) return;
@@ -270,7 +272,9 @@
       shortlisted: `Saved ${property ?? 'a property'}`,
       unshortlisted: `Removed ${property ?? 'a property'} from the shortlist`,
       site_visit_requested: `Asked to visit ${property ?? 'a property'}${e.alerted ? ' · sales team alerted' : ' · sales team not yet alerted'}`,
-      zero_result: `Searched for something we could not fully match: ${e.note ?? ''}`
+      zero_result: `Searched for something we could not fully match: ${e.note ?? ''}`,
+      handoff_reminder: `Reminded the team: ${e.note ?? ''}`,
+      handoff_customer_notice: `Told the customer the team has not replied yet (${e.note ?? ''})`
     }[e.type] ?? e.type;
     return el('li', {},
       el('span', { text: text }),
@@ -298,8 +302,10 @@
     try {
       const tests = state.showTests ? '1' : '0';
       const filter = $('request-filter').value;
-      const { requests, open } = await api(`/handoffs?${filter === 'all' ? '' : `status=${filter}&`}tests=${tests}`);
+      const { requests, open, overdue, serverTime } = await api(`/handoffs?${filter === 'all' ? '' : `status=${filter}&`}tests=${tests}`);
       setRequestCount(open);
+      state.clockOffset = Date.parse(serverTime) - Date.now();
+      $('request-summary').textContent = open ? `${open} open${overdue ? `, ${overdue} overdue` : ''}` : '';
       // A conversation being read or written stays as it is; the list around it refreshes.
       if (!force && document.activeElement?.closest?.('#request-list')) return;
       renderRequests(requests);
@@ -308,7 +314,38 @@
     }
   }
 
+  // "2 hrs 21 mins". Kept the same as the server's wording.
+  function formatWait(minutes) {
+    const total = Math.max(0, Math.floor(minutes));
+    if (total < 1) return 'less than a min';
+    const hours = Math.floor(total / 60);
+    const mins = total % 60;
+    return [hours && `${hours} ${hours === 1 ? 'hr' : 'hrs'}`, mins && `${mins} ${mins === 1 ? 'min' : 'mins'}`].filter(Boolean).join(' ');
+  }
+
+  // Counts every visible timer up, and turns a request red once it has waited longer than it should.
+  function tickWaits() {
+    const now = Date.now() + state.clockOffset;
+    let overdue = 0;
+    for (const node of document.querySelectorAll('#request-list .wait')) {
+      const minutes = (now - Date.parse(node.dataset.since)) / 60000;
+      node.textContent = `Customer wait time since - ${formatWait(minutes)}`;
+      const late = minutes >= Number(node.dataset.limit);
+      node.closest('.gap')?.classList.toggle('overdue', late);
+      if (late) overdue++;
+    }
+    const open = $('request-count').hidden ? 0 : Number($('request-count').textContent);
+    if (open && document.querySelector('#request-list .wait')) $('request-summary').textContent = `${open} open${overdue ? `, ${overdue} overdue` : ''}`;
+  }
+
+  // Requests the team owes an answer to come first, the longest wait at the top.
+  const requestOrder = (a, b) => {
+    const rank = (r) => (r.status === 'open' ? 0 : r.status === 'waiting_customer' ? 1 : 2);
+    return rank(a) - rank(b) || Number(b.overdue) - Number(a.overdue) || (Date.parse(a.waitingSince ?? a.createdAt) - Date.parse(b.waitingSince ?? b.createdAt));
+  };
+
   function renderRequests(requests) {
+    requests = [...requests].sort(requestOrder);
     $('request-list').replaceChildren(...(requests.length ? requests.map((r) => {
       const thread = el('div', { class: 'thread', 'aria-label': 'Conversation' });
       const reply = el('textarea', { maxlength: '1500', placeholder: 'Write a reply. The customer gets it from the bot as "Message from our team".', 'aria-label': 'Reply' });
@@ -350,7 +387,7 @@
       } });
 
       detail.append(thread, reply, el('div', { class: 'gap-actions' }, send));
-      return el('article', { class: 'gap' },
+      return el('article', { class: `gap${r.overdue ? ' overdue' : ''}` },
         el('div', { class: 'gap-head' },
           el('span', { class: 'gap-title' },
             el('span', { class: 'badge kind', text: r.kindLabel }),
@@ -360,6 +397,7 @@
           el('span', {}, el('span', { class: `req-status ${r.status}`, text: REQUEST_STATUS[r.status] ?? r.status }), el('span', { class: 'muted', text: ` · #${r.id} · ${timeAgo(r.createdAt)}` }))),
         el('p', { class: 'gap-quote', text: r.summary }),
         r.propertyTitle && el('p', { class: 'muted', text: `About: ${r.propertyTitle}` }),
+        r.status === 'open' && r.waitingSince && el('p', { class: 'wait', 'data-since': r.waitingSince, 'data-limit': String(r.replyMinutes), text: `Customer wait time since - ${formatWait((Date.now() + state.clockOffset - Date.parse(r.waitingSince)) / 60000)}` }),
         el('div', { class: 'gap-actions' }, toggle, finish),
         detail);
     }) : [el('p', { class: 'muted', text: 'Nothing here. Requests appear when a customer asks to visit, asks for a call back, makes an offer, or asks something the assistant cannot answer.' })]));

@@ -10,8 +10,9 @@ import { POR_LABEL, formatInr, priceDisplay } from '../money.js';
 import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { photosAnswer, PHOTOS_GENERAL } from './copy.js';
+import { normalizeCategory } from '../propertyTypes.js';
 import { DEFAULT_REPLIES, TOPICS, fieldAnswer, hasSearchIntent, isQuestion, topicOf } from './facts.js';
-import { asksAboutPhotos, isNegotiation, isPriceOffer, offeredAmount, wantsRental } from './intent.js';
+import { asksAboutPhotos, isNegotiation, isPriceOffer, offeredAmount, wantsRental, wantsVisit } from './intent.js';
 
 const STATUS_WORDS = { available: 'Available', under_construction: 'Under construction', reserved: 'Reserved', sold: 'Sold' };
 const ORDINALS = { first: 0, '1st': 0, second: 1, '2nd': 1, third: 2, '3rd': 2, fourth: 3, '4th': 3, fifth: 4, '5th': 4 };
@@ -183,6 +184,21 @@ export async function answerFromData({ text, lead, supabase, config: given = app
       if (!found) return { reply: `${ref.property.title} is no longer listed.` };
       const status = STATUS_WORDS[found.row.status] ?? found.row.status;
       return { reply: `${found.row.title} is listed as ${status}.${found.row.status === 'sold' ? ' It is no longer available.' : ''}` };
+    }
+  }
+
+  // A visit needs a property. With nothing on screen and no property named, ask which one, rather than searching again or
+  // repeating the last "no match" reply. A message that names an area, a kind of property or a listing is left to the search.
+  // "site visit" and "I want" are not about what to search for, so they are taken out before looking for a search.
+  const aboutWhat = t.replace(/\bsite visits?\b/gi, 'visit').replace(/\bi (?:want|need|would like|wish)\b/gi, '');
+  if ((wantsVisit(t) || proposesVisitTime(t)) && !shown.length && !hasSearchIntent(aboutWhat) && !resolveArea(aboutWhat) && !normalizeCategory(aboutWhat).length) {
+    const named = await findByName(supabase, t, config.propertiesTable).catch(() => null);
+    if (!named) {
+      return {
+        reply: lead.botState?.lastSearch
+          ? 'There is nothing to book a visit for yet, because my last search found no exact match. Would you like to change the area, the budget or the type of property?'
+          : 'Which property would you like to visit? I have not shown you one yet. Tell me what you are looking for, such as "3BHK in OMR under 1.5 crore", and I will show you options.'
+      };
     }
   }
 

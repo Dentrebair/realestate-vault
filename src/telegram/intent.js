@@ -52,3 +52,10 @@ export function wantsRental(text) {
   const t = String(text ?? '');
   return WANTS_RENT.test(t) && !RENTAL_ASPECT.test(t);
 }
+
+// Someone asking to book or arrange a visit ("book a site visit for the first one", "I want to visit it").
+const WANTS_VISIT = /\b(?:book|schedule|arrange|request|set up|fix|organi[sz]e)\b[^.?!]*\bvisit\b|\b(?:site )?visit (?:it|this|that|the (?:first|second|third|fourth|fifth|last) one|one)\b|\b(?:want|like|wish|need) to (?:visit|see|view)\b/i;
+
+export function wantsVisit(text) {
+  return WANTS_VISIT.test(String(text ?? ''));
+}

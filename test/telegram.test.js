@@ -649,7 +649,7 @@ test('a promised confirm button is sent by re-running the turn with that tool fo
 test('if no button can be sent, the promise to send one is removed', async () => {
   const h = harness({ generate: async () => ({ text: 'Happy to arrange it. Tap the "Confirm site visit" button to request it.' }) });
   await seedLead(h, {}, 'interested');
-  await h.send(say('I want to visit'));
+  await h.send(say('what happens next'));
   assert.equal(h.toUser().at(-1).text, 'Happy to arrange it.');
 });
 
@@ -1528,4 +1528,47 @@ test('if the lookup for a team reply fails, the team is told and the words are n
 
   assert.match(h.toSales().at(-1).text, /could not look up which request/);
   assert.ok(!h.toSales().some((m) => /Customer-style reply/.test(m.text)));
+});
+
+test('asking to book a visit with nothing on screen asks which property, instead of searching or repeating the last reply', async () => {
+  const fresh = harness({ route: null, generate: async () => { throw new Error('the model must not answer this'); } });
+  await seedLead(fresh, {}, 'interested');
+  await setBotState(fresh.supabase, ID, { scope: 'on_topic', shown: [] });
+  await fresh.send(say('book a site visit for the first one'));
+  assert.match(fresh.toUser()[0].text, /^Which property would you like to visit\?/);
+  assert.equal(fresh.toUser().length, 1);
+
+  // After a search that found nothing, say so plainly.
+  const empty = harness({ route: null, generate: async () => { throw new Error('the model must not answer this'); } });
+  await seedLead(empty, {}, 'interested');
+  await setBotState(empty.supabase, ID, { scope: 'on_topic', shown: [], lastSearch: { filters: {}, nextOffset: null } });
+  await empty.send(say('I want to visit it'));
+  assert.match(empty.toUser()[0].text, /nothing to book a visit for yet/);
+
+  // A time with nothing on screen is the same question.
+  const timed = harness({ route: null, generate: async () => { throw new Error('the model must not answer this'); } });
+  await seedLead(timed, {}, 'interested');
+  await setBotState(timed.supabase, ID, { scope: 'on_topic', shown: [] });
+  await timed.send(say('can I visit tomorrow at 5pm'));
+  assert.match(timed.toUser()[0].text, /^Which property would you like to visit\?/);
+});
+
+test('a visit request that names an area, a kind of property or a listing is still handled normally', async () => {
+  for (const message of ['I want to visit a flat in OMR', 'schedule a visit to the Guindy hotel', 'book a site visit for the Compact 1BHK Starter Flat']) {
+    let asked = 0;
+    const h = harness({ route: null, generate: async () => (asked++, { text: 'Which one?' }) });
+    await seedLead(h, {}, 'interested');
+    await setBotState(h.supabase, ID, { scope: 'on_topic', shown: [] });
+    await h.send(say(message));
+    assert.doesNotMatch(h.toUser()[0].text, /^Which property would you like to visit\?/, message);
+  }
+});
+
+test('with a property on screen, a visit request is untouched by the new rule', async () => {
+  let asked = 0;
+  const h = harness({ route: null, generate: async () => (asked++, { text: 'ok' }) });
+  await seedLead(h, {}, 'interested');
+  await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
+  await h.send(say('book a site visit for the first one'));
+  assert.doesNotMatch(h.toUser()[0].text, /^Which property would you like to visit\?/);
 });

@@ -7,7 +7,8 @@ import { hasSearchIntent } from './facts.js';
 import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { visitPrompt } from './cards.js';
-import { answerFromData, referenced } from './gateway.js';
+import { answerFromData, proposesVisitTime, referenced } from './gateway.js';
+import { wantsVisit } from './intent.js';
 import { rememberShown, sendCard } from './present.js';
 import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
@@ -96,7 +97,10 @@ export async function handleText(ctx, deps) {
   // A short reply to what the team wrote ("Saturday works") is for the team. The assistant only says it was passed on,
   // so it does not guess at times or prices. A question, a search or an offer still gets its normal handling.
   const words = text.trim().split(/\s+/).length;
-  if (relayed && !judged.negotiating && words <= 12 && !text.includes('?') && !hasSearchIntent(text)) {
+  // When the team is arranging a visit, a message about the day or time belongs to that visit. It is never a new visit
+  // for whichever card happens to be on screen, so no new Confirm button is sent.
+  const aboutTheVisit = relayed?.kind === 'visit' && (proposesVisitTime(text) || wantsVisit(text));
+  if (relayed && !judged.negotiating && ((words <= 12 && !text.includes('?') && !hasSearchIntent(text)) || aboutTheVisit)) {
     await saveMessage(supabase, customerId, 'user', text);
     await ctx.reply(TEAM_ACK);
     await saveMessage(supabase, customerId, 'assistant', TEAM_ACK);

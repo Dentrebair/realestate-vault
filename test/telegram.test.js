@@ -1365,6 +1365,22 @@ test('a short reply to the team gets a fixed acknowledgement, goes to the team, 
   assert.match(h.toSales().at(-1).text, /yes Saturday works/);
 });
 
+test('a message about the day or time, while the team arranges a visit, never sends a new Confirm button for another card', async () => {
+  let asked = 0;
+  const h = harness({ generate: async () => (asked++, { text: 'This should not be sent.' }) });
+  await requestVisit(h);
+  await h.send(fromTeam('Saturday 10 am works', alertMessageId(h)));
+  const before = h.toUser().length;
+
+  await h.send(say('ok I will come to visit it on Saturday at 10 am, is that fine for the property tour'));
+
+  assert.equal(asked, 0);
+  const sent = h.toUser().slice(before);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].text, 'Thanks, I have passed that to our team. They will confirm here.');
+  assert.ok(!sent[0].reply_markup);
+});
+
 test('a question, a search or an offer after the team\'s message is still handled normally', async () => {
   for (const message of ['what are your office hours?', 'show me villas in ECR', 'ok then can i get for 55L']) {
     let asked = 0;

@@ -36,7 +36,9 @@ function who(lead) {
 
 function alertText({ lead, kind, summary, property, handoff }) {
   if (kind === 'visit' && property) {
-    return `${visitAlert(lead, property)}${handoff ? `\nRequest #${handoff.id}` : ''}\n\n↩️ Reply to this message to answer the customer.`;
+    // A plain request says nothing more. A preferred time, the customer's own words, or "not open yet" is added under it.
+    const detail = summary && summary !== `Asked to visit ${property.title}` ? `\n🗓 ${esc(summary)}` : '';
+    return `${visitAlert(lead, property)}${detail}${handoff ? `\nRequest #${handoff.id}` : ''}\n\n↩️ Reply to this message to answer the customer.`;
   }
   const budget = [lead.budgetMin && formatInr(lead.budgetMin), lead.budgetMax && formatInr(lead.budgetMax)].filter(Boolean).join(' to ');
   return [

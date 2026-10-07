@@ -290,6 +290,22 @@ Decisions (owner, 2026-10-03): the team is one person for now (the Sales desk ch
 
 ---
 
+## Phase 2, sprint 4: site visit times
+
+Status: built 2026-10-07. Needs `sql/008_visit_availability.sql`; without it every visit request goes straight to the team, as before.
+
+Each listing has one of three visit settings, set by an admin in the Listings tab (Site visits panel):
+
+| Setting | What the customer sees after tapping Book Site Visit |
+|---|---|
+| Not set (default) | The request goes straight to the team, who arrange a time. |
+| Not open yet | "Site visits for X are not open yet", the team is told the customer is interested, no visit stage. |
+| Open on set times | The bot asks for a preferred date and time and lists the next windows. |
+
+Windows are weekly (days plus from and to times) or a specific date, with an optional note shown to customers. The customer's reply is read by the model (`readPreferredTime`, measured by `npm run eval:visit-time`); code then checks it against the windows and rejects a past time, a day with no window, or a time outside a window, and asks again with the options. A time inside a window records the request, moves the lead to site visit ready, and shows the team the preferred time on the alert. The team still confirms. If the model cannot be reached, words that look like a day or time go to the team as written. An unrelated message, or "never mind", leaves or ends the question; it also expires after 3 hours.
+
+Decisions: the bot never confirms a visit, the team does. A property already requested is not offered another button. Times are in the business time zone (`BUSINESS_TIME_ZONE`, default Asia/Kolkata). One slot is not reserved, so two customers can ask for the same time; the team resolves it.
+
 ## Audit, 2026-10-06
 
 A review of everything built, against the live database and the real model.
@@ -398,3 +414,4 @@ Commands (after P0):
 | 2026-10-06 | Reply timers: wait time on the board, red when overdue (30 min visit, 2 hr other), reminders in business hours, one customer notice after 24 hours. |
 | 2026-10-06 | Tests run on every push (GitHub Action); readiness page `/health/ready`; uptime check prepared and deferred to client rollout; visit request with nothing on screen asks which property. |
 | 2026-10-06 | Alert throttling deferred to the next phase. |
+| 2026-10-07 | Site visit times per listing (sprint 4); a time answer to the team no longer opens a button for another card; a property already requested is not offered again. |

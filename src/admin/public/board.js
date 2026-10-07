@@ -455,7 +455,8 @@
           el('span', { class: 'listing-meta', text: [p.location, p.category, p.price].filter(Boolean).join(' · ') }), el('br'),
           p.photoCount > 0
             ? el('span', { class: 'badge photos', text: `${p.photoCount} photo${p.photoCount === 1 ? '' : 's'}` })
-            : el('span', { class: 'badge nophoto', text: 'No photos yet' })))
+            : el('span', { class: 'badge nophoto', text: 'No photos yet' }), ' ',
+          el('span', { class: 'badge off', text: VISIT_LABELS[p.visits] ?? VISIT_LABELS.unset })))
     ) : [el('p', { class: 'muted', text: 'No listings match.' })]));
   }
 
@@ -471,10 +472,88 @@
   async function loadPhotoPanel(id) {
     try {
       const data = await api(`/properties/${encodeURIComponent(id)}/photos`);
-      if (state.openListing === id) renderPhotoPanel(data);
+      if (state.openListing === id) { renderPhotoPanel(data); loadVisitPanel(id, data.property.title); }
     } catch (e) {
       if (e.message !== 'signed out') $('drawer').replaceChildren(el('p', { class: 'error', text: e.message }), el('button', { type: 'button', onclick: closeDrawer, text: 'Close' }));
     }
+  }
+
+  // ---- site visit times for a listing -------------------------------------------------------------------
+  const VISIT_LABELS = { unset: 'Visits: team arranges', closed: 'Visits: not open', open: 'Visits: set times' };
+  const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+  async function loadVisitPanel(id, title) {
+    try {
+      const data = await api(`/properties/${encodeURIComponent(id)}/visits`);
+      if (state.openListing === id) renderVisitPanel(id, title, data);
+    } catch (e) {
+      if (e.message !== 'signed out') $('drawer').append(el('p', { class: 'error', text: `Could not load visit times: ${e.message}` }));
+    }
+  }
+
+  function renderVisitPanel(id, title, data) {
+    $('visit-box')?.remove();
+    const isAdmin = state.me?.role === 'admin';
+    const current = data.availability;
+    const mode = el('select', { 'aria-label': 'Site visits for this property', disabled: !isAdmin },
+      el('option', { value: 'unset', text: 'Not set: the team arranges each visit' }),
+      el('option', { value: 'closed', text: 'Not open yet: no visits for now' }),
+      el('option', { value: 'open', text: 'Open on the times below' }));
+    mode.value = current?.mode ?? 'unset';
+
+    const rows = el('div', { class: 'visit-rows' });
+    const note = el('input', { type: 'text', maxlength: '200', placeholder: 'Note for customers, for example: please bring photo ID', 'aria-label': 'Note shown to customers', value: current?.note ?? '', disabled: !isAdmin });
+    const time = (value, label) => el('input', { type: 'time', value, required: true, 'aria-label': label, disabled: !isAdmin });
+    const gone = (row) => isAdmin && el('button', { type: 'button', 'aria-label': 'Remove this window', onclick: () => row.remove(), text: '✕' });
+
+    const addWeekly = (rule = { days: [6], from: '10:00', to: '13:00' }) => {
+      const row = el('div', { class: 'visit-row', 'data-kind': 'weekly' },
+        el('span', { class: 'days' }, DAYS.map((name, d) => el('label', {}, el('input', { type: 'checkbox', value: String(d), checked: rule.days.includes(d), disabled: !isAdmin }), ` ${name}`))),
+        time(rule.from, 'From'), ' to ', time(rule.to, 'To'));
+      const x = gone(row); if (x) row.append(x);
+      rows.append(row);
+    };
+    const addDate = (rule = { date: '', from: '10:00', to: '13:00' }) => {
+      const row = el('div', { class: 'visit-row', 'data-kind': 'date' },
+        el('input', { type: 'date', value: rule.date, required: true, 'aria-label': 'Date', disabled: !isAdmin }),
+        time(rule.from, 'From'), ' to ', time(rule.to, 'To'));
+      const x = gone(row); if (x) row.append(x);
+      rows.append(row);
+    };
+    for (const r of current?.rules ?? []) (r.date ? addDate(r) : addWeekly(r));
+
+    const collect = () => [...rows.children].map((row) => {
+      const [from, to] = [...row.querySelectorAll('input[type=time]')].map((i) => i.value);
+      return row.dataset.kind === 'date'
+        ? { date: row.querySelector('input[type=date]').value, from, to }
+        : { days: [...row.querySelectorAll('input[type=checkbox]:checked')].map((i) => Number(i.value)), from, to };
+    });
+
+    const preview = el('ul', { class: 'muted' }, (data.preview ?? []).map((line) => el('li', { text: line })));
+    const editor = el('div', {}, rows,
+      isAdmin && el('p', {}, el('button', { type: 'button', onclick: () => addWeekly(), text: '+ Weekly window' }), ' ', el('button', { type: 'button', onclick: () => addDate(), text: '+ Specific date' })),
+      note);
+    const sync = () => { editor.hidden = mode.value === 'unset'; rows.hidden = mode.value !== 'open'; editor.querySelectorAll('p').forEach((p) => { p.hidden = mode.value !== 'open'; }); if (mode.value === 'open' && !rows.children.length && isAdmin) addWeekly(); };
+    mode.addEventListener('change', sync);
+
+    const save = async () => {
+      try {
+        const body = mode.value === 'unset' ? { mode: 'unset' } : { mode: mode.value, rules: mode.value === 'open' ? collect() : [], note: note.value };
+        const saved = await api(`/properties/${encodeURIComponent(id)}/visits`, { method: 'PUT', body: JSON.stringify(body) });
+        notice('Visit times saved.');
+        loadListings();
+        renderVisitPanel(id, title, saved);
+      } catch (e) { if (e.message !== 'signed out') notice(e.message, true); }
+    };
+
+    const box = el('section', { class: 'box', id: 'visit-box' },
+      el('h3', { text: 'Site visits' }),
+      el('p', { class: 'muted', text: 'When a customer taps Book Site Visit, the bot asks for a date and time and only accepts one inside these windows. If nothing is set, the request goes straight to the team.' }),
+      mode, editor,
+      mode.value === 'open' && data.preview?.length ? el('div', {}, el('p', { class: 'muted', text: 'Customers are offered, from today:' }), preview) : null,
+      isAdmin ? el('p', {}, el('button', { type: 'button', onclick: save, text: 'Save visit times' })) : el('p', { class: 'muted', text: 'Your account can view these but not change them.' }));
+    $('drawer').append(box);
+    sync();
   }
 
   // Shrink to at most 1600 px and re-encode. Keeps uploads small, and drops the location data phones put in photos.

@@ -8,6 +8,7 @@ import { getBoard, getDemand, getLeadDetail } from './board.js';
 import { mountHandoffRoutes } from './handoffRoutes.js';
 import { mountKnowledgeRoutes } from './knowledgeRoutes.js';
 import { mountPhotoRoutes } from './photoRoutes.js';
+import { mountVisitRoutes } from './visitRoutes.js';
 
 const publicDir = fileURLToPath(new URL('./public/', import.meta.url));
 
@@ -132,6 +133,7 @@ export function createAdminRouter({ supabase, auth, showConversations = 'test', 
   });
 
   mountPhotoRoutes(router, { supabase, requireStaff, requireJson });
+  mountVisitRoutes(router, { supabase, requireStaff, requireJson });
   mountKnowledgeRoutes(router, { supabase, requireStaff, requireJson });
   mountHandoffRoutes(router, { supabase, requireStaff, requireJson, telegram });
 

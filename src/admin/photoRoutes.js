@@ -3,6 +3,7 @@ import express from 'express';
 import { config } from '../config.js';
 import { MAX_BYTES, MAX_PHOTOS, addPhoto, listPhotos, loadPhotos, removePhoto, reorderPhotos } from '../photos.js';
 import { priceDisplay } from '../money.js';
+import { listAvailability } from '../visitSlots.js';
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
@@ -26,6 +27,7 @@ export function mountPhotoRoutes(router, { supabase, requireStaff, requireJson }
         .limit(1000);
       if (error) throw error;
       const photos = await loadPhotos(supabase, data.map((p) => p.property_id));
+      const visits = await listAvailability(supabase, data.map((p) => p.property_id));
 
       const properties = data
         .map((p) => ({
@@ -35,6 +37,7 @@ export function mountPhotoRoutes(router, { supabase, requireStaff, requireJson }
           category: p.category,
           status: p.status,
           price: priceDisplay(p.price_inr),
+          visits: visits.get(p.property_id) ?? 'unset',
           photoCount: photos.get(p.property_id)?.length ?? 0,
           cover: photos.get(p.property_id)?.[0]?.url ?? null
         }))

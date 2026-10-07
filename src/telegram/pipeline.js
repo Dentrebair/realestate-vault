@@ -9,7 +9,7 @@ import { getProperty } from '../propertySearch.js';
 import { visitPrompt } from './cards.js';
 import { answerFromData, findByName, proposesVisitTime, referenced } from './gateway.js';
 import { wantsVisit } from './intent.js';
-import { visitAlreadyAsked } from './visits.js';
+import { continueVisit, visitAlreadyAsked } from './visits.js';
 import { VISIT_ALREADY } from './copy.js';
 import { rememberShown, sendCard } from './present.js';
 import { loadHistory, saveMessage } from './history.js';
@@ -59,6 +59,12 @@ export async function handleText(ctx, deps) {
     await setBotState(supabase, customerId, { scope: 'on_topic' });
     lead.botState = { ...lead.botState, scope: 'on_topic' };
   }
+
+  // The customer was asked when they would like to visit. Their answer is dealt with before anything else is read.
+  if (lead.botState?.pendingVisit && await continueVisit(ctx, deps, lead, text).catch((error) => {
+    log('visit_time_failed', { customerId, error: error.message }, 'error');
+    return false;
+  })) return;
 
   // Asking for a discount is negotiation whether or not the model notices. Code does not rely on it.
   // Is the customer negotiating, and did they make an offer? The model decides; code then enforces what follows.

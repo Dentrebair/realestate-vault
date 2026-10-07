@@ -691,3 +691,41 @@ test('the list says since when each customer has waited, and which requests are 
   supabase.tables.handoffs.find((h) => h.id === 2).kind = 'visit';
   assert.equal((await agent.get('/admin/api/handoffs').expect(200)).body.requests.find((r) => r.id === 2).replyMinutes, 30, 'a visit gets thirty minutes');
 });
+
+// ---- site visit times -----------------------------------------------------------------------
+
+test('an admin sets, reads and clears the visit times of a listing; a viewer can read but not change', async () => {
+  const { app, supabase } = build();
+  const admin = await signIn(app);
+  const viewer = await signIn(app, 'viewer@x.com');
+  const path = '/admin/api/properties/p04/visits';
+
+  assert.equal((await viewer.get(path).expect(200)).body.availability, null);
+  assert.equal((await admin.get('/admin/api/properties').expect(200)).body.properties.find((p) => p.id === 'p04').visits, 'unset');
+
+  await viewer.put(path).send({ mode: 'closed' }).expect(403);
+  await admin.put(path).send({ mode: 'open', rules: [{ days: [6], from: '10:00', to: '13:00' }], note: 'Bring ID' }).expect(200);
+
+  const read = (await viewer.get(path).expect(200)).body;
+  assert.equal(read.availability.mode, 'open');
+  assert.equal(read.availability.note, 'Bring ID');
+  assert.ok(read.preview.length >= 1);
+  assert.equal(supabase.tables.visit_availability[0].updated_by, 'admin@x.com');
+  assert.equal((await admin.get('/admin/api/properties').expect(200)).body.properties.find((p) => p.id === 'p04').visits, 'open');
+
+  await admin.put(path).send({ mode: 'closed' }).expect(200);
+  assert.equal(supabase.tables.visit_availability.length, 1);
+  assert.equal(supabase.tables.visit_availability[0].mode, 'closed');
+
+  await admin.put(path).send({ mode: 'unset' }).expect(200);
+  assert.equal(supabase.tables.visit_availability.length, 0);
+});
+
+test('bad visit times are refused, and an unknown listing is not found', async () => {
+  const { app } = build();
+  const admin = await signIn(app);
+  const bad = await admin.put('/admin/api/properties/p04/visits').send({ mode: 'open', rules: [{ days: [6], from: '13:00', to: '10:00' }] }).expect(400);
+  assert.match(bad.body.message, /start time before/);
+  await admin.get('/admin/api/properties/nope/visits').expect(404);
+  await admin.put('/admin/api/properties/nope/visits').send({ mode: 'closed' }).expect(404);
+});

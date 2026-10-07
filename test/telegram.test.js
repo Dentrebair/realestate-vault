@@ -12,6 +12,7 @@ import { CAPTION_LIMIT, renderCard } from '../src/telegram/cards.js';
 import { FALLBACK, NON_TEXT, OFF_TOPIC, RATE_LIMITED, STALE_PROPERTY, TOO_LONG } from '../src/telegram/copy.js';
 import { Cr, L, properties } from './fixtures/properties.js';
 import { createFakeSupabase } from './helpers/fakeSupabase.js';
+import { nowIn } from '../src/visitSlots.js';
 
 const USER = 4242;
 const SALES = 999;
@@ -1614,4 +1615,122 @@ test('with a property on screen, a visit request is untouched by the new rule', 
   await setBotState(h.supabase, ID, { scope: 'on_topic', shown: shownFor('p04') });
   await h.send(say('book a site visit for the first one'));
   assert.doesNotMatch(h.toUser()[0].text, /^Which property would you like to visit\?/);
+});
+
+// ---- asking when to visit ---------------------------------------------------------------------
+
+const EVERY_DAY = [0, 1, 2, 3, 4, 5, 6];
+const OPEN_RULES = { property_id: 'p04', mode: 'open', rules: [{ days: EVERY_DAY, from: '10:00', to: '13:00' }], note: 'Please bring photo ID' };
+const TIME_ASK = /A real-estate customer in Chennai was asked/;
+const tomorrow = () => {
+  const here = nowIn(new Date(), 'Asia/Kolkata').date;
+  return new Date(Date.parse(`${here}T12:00:00Z`) + 86400000).toISOString().slice(0, 10);
+};
+// `reads` stands in for the model reading the customer's wish for a date and time.
+const visitHarness = ({ availability = OPEN_RULES, reads = { date: tomorrow(), time: '11:00', cancel: false, unrelated: false }, other } = {}) =>
+  harness({
+    tables: { visit_availability: availability ? [availability] : [] },
+    generate: async (options) => {
+      if (TIME_ASK.test(options.instructions ?? '')) {
+        if (reads === 'down') throw new Error('model down');
+        return { text: JSON.stringify(typeof reads === 'function' ? reads(options.prompt) : reads) };
+      }
+      return other ? other(options) : { text: 'Happy to help.' };
+    }
+  });
+
+test('a property with set visit times: the bot asks for a date and time, and the team is not alerted yet', async () => {
+  const h = visitHarness();
+  await requestVisit(h);
+
+  const ask = h.toUser().at(-1).text;
+  assert.match(ask, /When would you like to visit High-Rise 2BHK/);
+  assert.match(ask, /10 am to 1 pm/);
+  assert.match(ask, /Please bring photo ID/);
+  assert.equal(h.toSales().length, 0);
+  assert.equal(h.rows('lead_events').filter((e) => e.event_type === 'site_visit_requested').length, 0);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'interested');
+});
+
+test('a time inside the windows is recorded, the stage moves, and the team sees the preferred time', async () => {
+  const h = visitHarness();
+  await requestVisit(h);
+  await h.send(say('tomorrow 11am please'));
+
+  assert.match(h.toUser().at(-2).text, /Site visit request noted/);
+  assert.match(h.toUser().at(-2).text, /You asked for/);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'site_visit_ready');
+  const alert = h.toSales().at(-1).text;
+  assert.match(alert, /preferred/);
+  assert.match(alert, /11 am/);
+  const [handoff] = h.rows('handoffs');
+  assert.equal(handoff.kind, 'visit');
+  assert.equal((await getLead(h.supabase, ID)).botState.pendingVisit, null);
+});
+
+test('a time outside the windows is refused with the options, and nothing is sent to the team', async () => {
+  const h = visitHarness({ reads: { date: tomorrow(), time: '17:00', cancel: false, unrelated: false } });
+  await requestVisit(h);
+  await h.send(say('tomorrow 5pm'));
+
+  assert.match(h.toUser().at(-1).text, /outside the visit hours/);
+  assert.match(h.toUser().at(-1).text, /10 am to 1 pm/);
+  assert.equal(h.toSales().length, 0);
+  assert.ok((await getLead(h.supabase, ID)).botState.pendingVisit, 'still waiting for a time');
+});
+
+test('a day with no windows is refused, and a day without a time is asked for', async () => {
+  const dates = { date: tomorrow(), time: null, cancel: false, unrelated: false };
+  const h = visitHarness({ availability: { ...OPEN_RULES, rules: [{ date: '2099-01-01', from: '10:00', to: '12:00' }, { days: EVERY_DAY, from: '10:00', to: '13:00' }] }, reads: dates });
+  await requestVisit(h);
+  await h.send(say('tomorrow'));
+  assert.match(h.toUser().at(-1).text, /What time on/);
+  assert.equal(h.toSales().length, 0);
+});
+
+test('a property whose visits are not open yet says so and tells the team, with no visit stage', async () => {
+  const h = visitHarness({ availability: { property_id: 'p04', mode: 'closed', rules: [], note: null } });
+  await requestVisit(h);
+
+  assert.match(h.toUser().at(-1).text, /not open yet/);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'interested');
+  assert.match(h.toSales().at(-1).text, /not open/);
+  assert.equal(h.rows('lead_events').filter((e) => e.event_type === 'site_visit_requested').length, 0);
+});
+
+test('a property with no visit times set goes straight to the team, as before', async () => {
+  const h = visitHarness({ availability: null });
+  await requestVisit(h);
+
+  assert.match(h.toUser().find((m) => /Site visit request noted/.test(m.text)).text, /Our team will confirm a time shortly/);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'site_visit_ready');
+  assert.equal(h.toSales().length, 1);
+});
+
+test('while a time is being asked for, an unrelated message is handled normally and the question stays open', async () => {
+  let asked = false;
+  const h = visitHarness({ reads: { date: null, time: null, cancel: false, unrelated: true }, other: async () => ((asked = true), { text: 'Happy to help.' }) });
+  await requestVisit(h);
+  await h.send(say('what are your office hours?'));
+
+  assert.ok((await getLead(h.supabase, ID)).botState.pendingVisit);
+  assert.equal(h.toSales().length, 0);
+});
+
+test('"never mind" while a time is being asked for cancels it', async () => {
+  const h = visitHarness({ reads: { date: null, time: null, cancel: true, unrelated: false } });
+  await requestVisit(h);
+  await h.send(say('never mind'));
+
+  assert.equal((await getLead(h.supabase, ID)).botState.pendingVisit, null);
+  assert.equal(h.toSales().length, 0);
+});
+
+test('if the model cannot read the time, words that look like a day go to the team as written', async () => {
+  const h = visitHarness({ reads: 'down' });
+  await requestVisit(h);
+  await h.send(say('tomorrow morning works'));
+
+  assert.match(h.toSales().at(-1).text, /tomorrow morning works/);
+  assert.equal((await getLead(h.supabase, ID)).leadStage, 'site_visit_ready');
 });

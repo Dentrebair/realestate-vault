@@ -3,7 +3,6 @@ import {
   addToShortlist,
   getLead,
   recordConsent,
-  recordEvent,
   removeFromShortlist,
   setBotState,
   setStage
@@ -13,11 +12,12 @@ import { getProperty, searchProperties } from '../propertySearch.js';
 import { eraseCustomer } from '../privacy.js';
 import { browseKeyboard, cardKeyboard } from './cards.js';
 import { CONSENT_NEEDED, FORGET_CANCELLED, FORGOTTEN, consentPrompt, needsConsent, privacyNotice } from './consent.js';
-import { STALE_PROPERTY, SHARE_NUMBER_PROMPT, VISIT_ALREADY, visitRecorded, welcome } from './copy.js';
+import { STALE_PROPERTY, VISIT_ALREADY, welcome } from './copy.js';
 import { saveMessage } from './history.js';
 import { customerIdOf, ensureLead } from './lead.js';
 import { rememberShown, sendSearchResult } from './present.js';
-import { raiseHandoff, resolveFromTelegram } from './handoff.js';
+import { resolveFromTelegram } from './handoff.js';
+import { startVisit } from './visits.js';
 import { Keyboard } from 'grammy';
 
 const SHOWABLE = ['available', 'under_construction'];
@@ -78,42 +78,7 @@ async function visit(ctx, deps, propertyId) {
     return { text: 'Already requested' };
   }
 
-  if (!earlier.length) {
-    await setStage(supabase, customerId, 'site_visit_ready', {
-      actor: 'button',
-      propertyId,
-      reason: 'tapped Book Site Visit'
-    });
-    await recordEvent(supabase, customerId, 'site_visit_requested', { toStage: 'site_visit_ready', propertyId });
-  }
-
-  const confirmation = visitRecorded(found.view.title, config.businessHours);
-  await ctx.reply(confirmation);
-  await saveMessage(supabase, customerId, 'assistant', confirmation, { visit: propertyId });
-
-  if (!lead.phone) {
-    await ctx.reply(SHARE_NUMBER_PROMPT, {
-      reply_markup: new Keyboard().requestContact('📞 Share my number').oneTime().resized()
-    });
-  }
-
-  const fresh = await getLead(supabase, customerId);
-  const { alerted } = await raiseHandoff({
-    deps,
-    lead: fresh,
-    kind: 'visit',
-    summary: `Asked to visit ${found.view.title}`,
-    property: found.view
-  });
-  if (alerted) {
-    await supabase
-      .from('lead_events')
-      .update({ alerted_at: new Date().toISOString() })
-      .eq('customer_id', customerId)
-      .eq('event_type', 'site_visit_requested')
-      .eq('property_id', propertyId);
-  }
-  return { text: 'Visit request noted' };
+  return startVisit(ctx, deps, lead, found, propertyId);
 }
 
 async function save(ctx, deps, propertyId) {

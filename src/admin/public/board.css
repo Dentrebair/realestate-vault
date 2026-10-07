@@ -155,3 +155,9 @@ input, select { border: 1px solid var(--line); background: var(--panel); border-
 .wait { margin: 0; font-weight: 600; color: var(--muted); font-variant-numeric: tabular-nums; }
 .gap.overdue .wait { color: var(--danger); }
 #request-summary { margin: 0 0 8px; }
+
+/* site visit times */
+#visit-box { margin-top: 12px; }
+#visit-box select, #visit-box input[type=text] { width: 100%; margin: 6px 0; }
+.visit-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.visit-row .days { display: inline-flex; flex-wrap: wrap; gap: 6px; font-size: 13px; }

@@ -10,6 +10,7 @@
     "test": "node --test test/*.test.js",
     "seed:test-leads": "node scripts/seed-test-leads.js",
     "eval": "node evals/run.js",
+    "eval:visit-time": "node evals/visit-time.js",
     "eval:router": "node evals/router.js",
     "eval:negotiation": "node evals/intent-compare.js",
     "demo:reset": "node scripts/seed-test-leads.js --clean && node scripts/seed-test-leads.js",

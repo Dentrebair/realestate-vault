@@ -65,7 +65,7 @@ function harness({ generate: given = async () => ({ text: 'ok' }), route = null,
     token: '123:test',
     botInfo: BOT_INFO,
     supabase,
-    config: { salesDeskChatId: SALES, businessHours: 'Mon to Sat, 10am to 7pm', agentTimeoutMs: 5000, requireConsent: false, businessName: 'Acme Homes', privacyContact: 'privacy@acme.example', consentVersion: 'v-test', chatRetentionHours: 24, leadRetentionHours: 24 * 365, ...config },
+    config: { propertiesTable: 'properties', salesDeskChatId: SALES, businessHours: 'Mon to Sat, 10am to 7pm', agentTimeoutMs: 5000, requireConsent: false, businessName: 'Acme Homes', privacyContact: 'privacy@acme.example', consentVersion: 'v-test', chatRetentionHours: 24, leadRetentionHours: 24 * 365, ...config },
     ai: { generate, model: {}, providerOptions: undefined }
   });
   bot.api.config.use(async (_previous, method, payload) => {
@@ -1379,6 +1379,33 @@ test('a message about the day or time, while the team arranges a visit, never se
   assert.equal(sent.length, 1);
   assert.equal(sent[0].text, 'Thanks, I have passed that to our team. They will confirm here.');
   assert.ok(!sent[0].reply_markup);
+});
+
+test('naming a different listing while a visit is being arranged gets its own Confirm button', async () => {
+  const h = harness({ generate: async () => ({ text: 'Happy to help.' }) });
+  await requestVisit(h);
+  await h.send(fromTeam('Saturday 10 am works', alertMessageId(h)));
+  const before = h.toUser().length;
+
+  await h.send(say('I also want to visit the F&B Approved Cloud Kitchen Facility on Saturday'));
+
+  const sent = h.toUser().slice(before);
+  assert.ok(sent.some((m) => /Cloud Kitchen/.test(m.text) && m.reply_markup), 'the other listing gets a button');
+  assert.ok(!sent.some((m) => m.text === 'Thanks, I have passed that to our team. They will confirm here.'));
+});
+
+test('a property whose visit was already requested is not offered a button again', async () => {
+  const h = harness({ generate: async () => ({ text: 'Happy to help.' }) });
+  await requestVisit(h, 'p20');
+  await h.send(tap('action:visit:p04'));
+  await h.send(fromTeam('Saturday 10 am works', alertMessageId(h)));
+  const before = h.toUser().length;
+
+  await h.send(say('I want to visit the High-Rise 2BHK Apartment near Tech Parks on Saturday'));
+
+  const sent = h.toUser().slice(before);
+  assert.ok(!sent.some((m) => m.reply_markup), 'no second button');
+  assert.equal(sent.at(-1).text, 'You have already asked to visit this property. Our team will confirm a time shortly.');
 });
 
 test('a question, a search or an offer after the team\'s message is still handled normally', async () => {

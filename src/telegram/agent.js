@@ -7,6 +7,7 @@ import { loadPhotos } from '../photos.js';
 import { getProperty, searchProperties } from '../propertySearch.js';
 import { CATEGORIES } from '../propertyTypes.js';
 import { visitPrompt } from './cards.js';
+import { visitAlreadyAsked } from './visits.js';
 import { narrateSearch } from './narrate.js';
 import { recordGap, relevantEntries } from '../knowledge.js';
 import { locateProperty } from '../microMarkets.js';
@@ -33,7 +34,7 @@ export function createDeps(overrides = {}) {
 
 export async function runAgentTurn({ deps, supabase, api, chatId, lead, history, text }) {
   const customerId = lead.customerId;
-  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [], visitPromptSent: false, narration: null, sendCards: null };
+  const state = { shown: lead.botState?.shown ?? [], toolOutputs: [], unavailable: [], visitPromptSent: false, visitAlready: false, narration: null, sendCards: null };
 
   const record = (output) => {
     state.toolOutputs.push(JSON.stringify(output));
@@ -135,6 +136,14 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
         if (!found || !['available', 'under_construction'].includes(found.row.status)) {
           return record({ sent: false, problem: 'That property is not available. Run search_properties first.' });
         }
+        if (await visitAlreadyAsked(supabase, lead.customerId, id)) {
+          state.visitAlready = true;
+          return record({
+            confirmButtonSent: false,
+            title: found.view.title,
+            tellCustomer: 'The customer has already asked to visit this property and the team has been told. No button is sent. Say the team will confirm a time here.'
+          });
+        }
         const prompt = visitPrompt(found.view);
         await api.sendMessage(chatId, prompt.text, { parse_mode: 'HTML', reply_markup: prompt.keyboard });
         state.visitPromptSent = true;
@@ -182,7 +191,7 @@ export async function runAgentTurn({ deps, supabase, api, chatId, lead, history,
   }
 
   // The model sometimes says "tap the Confirm button" without having sent one. Make it send one.
-  if (!state.visitPromptSent && claimsVisitButton(result.text) && state.shown.length) {
+  if (!state.visitPromptSent && !state.visitAlready && claimsVisitButton(result.text) && state.shown.length) {
     result = await run({
       prepareStep: ({ stepNumber }) =>
         stepNumber === 0 ? { toolChoice: { type: 'tool', toolName: 'request_site_visit' } } : {}

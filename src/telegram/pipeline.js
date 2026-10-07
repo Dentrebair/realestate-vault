@@ -7,8 +7,10 @@ import { hasSearchIntent } from './facts.js';
 import { loadPhotos } from '../photos.js';
 import { getProperty } from '../propertySearch.js';
 import { visitPrompt } from './cards.js';
-import { answerFromData, proposesVisitTime, referenced } from './gateway.js';
+import { answerFromData, findByName, proposesVisitTime, referenced } from './gateway.js';
 import { wantsVisit } from './intent.js';
+import { visitAlreadyAsked } from './visits.js';
+import { VISIT_ALREADY } from './copy.js';
 import { rememberShown, sendCard } from './present.js';
 import { loadHistory, saveMessage } from './history.js';
 import { log } from './log.js';
@@ -99,8 +101,28 @@ export async function handleText(ctx, deps) {
   const words = text.trim().split(/\s+/).length;
   // When the team is arranging a visit, a message about the day or time belongs to that visit. It is never a new visit
   // for whichever card happens to be on screen, so no new Confirm button is sent.
-  const aboutTheVisit = relayed?.kind === 'visit' && (proposesVisitTime(text) || wantsVisit(text));
-  if (relayed && !judged.negotiating && ((words <= 12 && !text.includes('?') && !hasSearchIntent(text)) || aboutTheVisit)) {
+  // Naming a different listing is a new request, and gets its own button.
+  const named = relayed?.kind === 'visit' ? await findByName(supabase, text, config.propertiesTable).catch(() => null) : null;
+  const otherListing = Boolean(named && named.property_id !== relayed.propertyId);
+  const aboutTheVisit = relayed?.kind === 'visit' && !otherListing && (proposesVisitTime(text) || wantsVisit(text));
+  if (otherListing && (proposesVisitTime(text) || wantsVisit(text)) && ['available', 'under_construction'].includes(named.status)) {
+    await saveMessage(supabase, customerId, 'user', text);
+    if (await visitAlreadyAsked(supabase, customerId, named.property_id)) {
+      await ctx.reply(VISIT_ALREADY);
+      await saveMessage(supabase, customerId, 'assistant', VISIT_ALREADY);
+      return;
+    }
+    const found = await getProperty(supabase, named.property_id);
+    if (found) {
+      const reply = `Tap the button to request a visit to ${found.view.title}. Our team will then confirm a time (${config.businessHours}).`;
+      await ctx.reply(reply);
+      await saveMessage(supabase, customerId, 'assistant', reply);
+      const prompt = visitPrompt(found.view);
+      await api.sendMessage(chatId, prompt.text, { parse_mode: 'HTML', reply_markup: prompt.keyboard });
+      return;
+    }
+  }
+  if (relayed && !judged.negotiating && !otherListing && ((words <= 12 && !text.includes('?') && !hasSearchIntent(text)) || aboutTheVisit)) {
     await saveMessage(supabase, customerId, 'user', text);
     await ctx.reply(TEAM_ACK);
     await saveMessage(supabase, customerId, 'assistant', TEAM_ACK);
@@ -137,7 +159,10 @@ export async function handleText(ctx, deps) {
       }
       if (answered.visitFor) {
         const found = await getProperty(supabase, answered.visitFor);
-        if (found) {
+        if (found && await visitAlreadyAsked(supabase, customerId, answered.visitFor)) {
+          await ctx.reply(VISIT_ALREADY);
+          await saveMessage(supabase, customerId, 'assistant', VISIT_ALREADY);
+        } else if (found) {
           const prompt = visitPrompt(found.view);
           await api.sendMessage(chatId, prompt.text, { parse_mode: 'HTML', reply_markup: prompt.keyboard });
         }
